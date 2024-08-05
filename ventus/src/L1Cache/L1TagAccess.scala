@@ -40,6 +40,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, readOnly: Boolean)extends Mo
     //From memRsp_pipe0
     val allocateWrite = Flipped(ValidIO(new SRAMBundleA(set)))//Allocate Channel
     val allocateWriteData_st1 = Input(UInt(tagBits.W))
+    val allocateIsUncached_st1 = Input(Bool())
     //From memRsp_pipe1
     val allocateWriteTagSRAMWValid_st1 = Input(Bool())
     //To memRsp_pipe1
