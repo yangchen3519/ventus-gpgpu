@@ -734,6 +734,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
   TagAccess.io.invalidateAll := flushL2 && coreReqControl_st1_Q.io.deq.bits.isInvalidate
 
   memReq_Q.io.enq <> MemReqArb.io.out
+  // todo use dirtyreplace io to do uncached evict
   MemReqArb.io.in(0).valid := tagReplaceStatus
   MemReqArb.io.in(0).bits := dirtyReplace_st1
   MemReqArb.io.in(1).valid := coreReq_st1_valid  && coreReq_Q.io.deq.fire() && ((writeMiss_st1 || readMiss_st1) && mshrProbeStatus === 0.U) //&& !injectTagProbe

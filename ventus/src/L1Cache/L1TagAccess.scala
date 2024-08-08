@@ -40,7 +40,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, readOnly: Boolean)extends Mo
     //From memRsp_pipe0
     val allocateWrite = Flipped(ValidIO(new SRAMBundleA(set)))//Allocate Channel
     val allocateWriteData_st1 = Input(UInt(tagBits.W))
-    val allocateIsUncached_st1 = Input(Bool())
+    val allocateIsUncached_st1 = Input(Bool()) ///todo dont need, unccache req will not give valid allocatewrite.valid
     //From memRsp_pipe1
     val allocateWriteTagSRAMWValid_st1 = Input(Bool())
     //To memRsp_pipe1
@@ -160,7 +160,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, readOnly: Boolean)extends Mo
   cachehit_hold.io.enq.valid := probeReadBuf.valid && !probeReadBuf.ready
   cachehit_hold.io.deq.ready := probeReadBuf.ready
   //val cachehit_hold = RegNext(iTagChecker.io.cache_hit && probeReadBuf.valid && !probeReadBuf.ready)
-  io.hit_st1 := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid//RegNext(io.probeRead.fire)
+  io.hit_st1 := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid//RegNext(io.probeRead.fire) //todo remove
   io.hitStatus_st1.hit := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid
   io.hitStatus_st1.waymask := Mux(cachehit_hold.io.deq.valid && cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
   io.hitStatus_st1.isDirty := way_dirty(probeReadBuf.bits.setIdx)(OHToUInt(iTagChecker.io.waymask))
