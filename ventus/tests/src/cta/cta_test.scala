@@ -6,6 +6,7 @@ import chisel3.util._
 import chiseltest._
 import org.scalatest.freespec.AnyFreeSpec
 import cta._
+import top.parameters.{CTA_SCHE_CONFIG => CONFIG}
 
 import scala.util.Random
 
@@ -54,9 +55,9 @@ class Wf_slot {
   var vgpr: (Int, Int) = _
   var csr: Int = _
   var time: Int = _
-  assert(CONFIG.WG.NUM_WF_MAX == 32 && CONFIG.GPU.NUM_WG_SLOT == 8)
-  def wf_id: Int = (wf_tag & 0x1F)
-  def wg_slot: Int = (wf_tag >> 5) & 0x7
+  assert(CONFIG.WG.NUM_WF_MAX == 8 && CONFIG.GPU.NUM_WG_SLOT == 8)
+  def wf_id: Int = (wf_tag & 0x7)
+  def wg_slot: Int = (wf_tag >> 3) & 0x7
   def :=(that: Wf_slot): Unit = {
     valid = that.valid
     wg_id = that.wg_id
@@ -238,6 +239,7 @@ class RunCtaTests extends AnyFreeSpec with ChiselScalatestTester {
         _.csr_kernel-> test.in.csr(i).U(CONFIG.GPU.MEM_ADDR_WIDTH),
         _.num_sgpr_per_wf -> test.in.sgpr(i).U,
         _.num_vgpr_per_wf -> test.in.vgpr(i).U,
+        _.num_pds_per_wf -> i.U,
         _.num_sgpr -> (test.in.sgpr(i) * test.in.wf(i)).U,
         _.num_vgpr -> (test.in.vgpr(i) * test.in.wf(i)).U,
         _.num_lds -> test.in.lds(i).U,
