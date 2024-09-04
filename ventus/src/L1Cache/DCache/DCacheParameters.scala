@@ -25,6 +25,8 @@ case class DCacheParameters
   NMshrEntry: Int = dcache_MshrEntry,
   NMshrSubEntry: Int = dcache_MshrSubEntry,
   NWshrEntry: Int = dcache_wshr_entry,
+  NMshrSet: Int = dcache_MshrSet,
+  NMshrWay: Int = dcache_MshrWay
 )
 
 trait HasDCacheParameter extends HasL1CacheParameters {
@@ -37,6 +39,8 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   //override def BlockWords: Int = BlockWords
   override def NMshrEntry: Int = dcacheParams.NMshrEntry
   override def NMshrSubEntry: Int = dcacheParams.NMshrSubEntry
+  def NMshrSet: Int = dcacheParams.NMshrSet
+  def NMshrWay: Int = dcacheParams.NMshrWay
   def NWshrEntry: Int = dcacheParams.NWshrEntry
   def NBanks = NLanes
   //                                       |   blockOffset  |

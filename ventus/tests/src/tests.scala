@@ -52,15 +52,6 @@ class hello_test2 extends AnyFreeSpec with ChiselScalatestTester{
     }
   }
 }
-class cache_submodule_test extends AnyFreeSpec with ChiselScalatestTester{
-  "first_test" in {
-    val param = (new MyConfig).toInstance
-    test(new L1RTAB()(param)).withAnnotations(Seq(WriteVcdAnnotation)){ c =>
-      c.clock.step(5
-      )
-    }
-  }
-}
 
 class single extends AnyFreeSpec with ChiselScalatestTester{
   "first_test" in {

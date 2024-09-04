@@ -84,6 +84,9 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def dcache_MshrEntry: Int = 4
 
   def dcache_MshrSubEntry: Int = 2
+  def dcache_MshrSet: Int = 2
+  def dcache_MshrWay: Int = 4
+
   def num_sfu = (num_thread >> 2).max(1)
 
   def sharedmem_depth = 1024
