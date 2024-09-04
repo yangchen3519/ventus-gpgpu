@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: 2022 Jiuyang Liu <liu@jiuyang.me>
+
 // Import Mill dependencies
 import mill._
 import mill.scalalib._
@@ -193,6 +196,8 @@ trait Ventus
       v.chiselCrossVersions(chiselVersion)._3
     )
   }
+
+  def mainClass = Some("top.GPGPU_gen")   // def this to specify top App when generating verilog
 }
 
 // trait VentusGPGPUPublishModule extends PublishModule {
