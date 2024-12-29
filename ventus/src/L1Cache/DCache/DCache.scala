@@ -488,7 +488,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   InvOrFluMemReq.a_param := Mux(invalidatenodirty,L2flush.a_param,0.U) //regular write
   InvOrFluMemReq.a_source := DontCare //wait for WSHR
   InvOrFluMemReq.a_addr.get := RegNext(Cat(TagAccess.io.dirtyTag_st1.get,
-    TagAccess.io.dirtySetIdx_st0.get, 0.U((WordLength - TagBits - SetIdxBits).W)))
+    RegNext(TagAccess.io.dirtySetIdx_st0.get), 0.U((WordLength - TagBits - SetIdxBits).W)))
   if(MMU_ENABLED){
     InvOrFluMemReq.Asid.get := TagAccess.io.dirtyASID_st1.get
   }
