@@ -364,16 +364,16 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   l1Cache2L2Arb.io.memRspVecOut(0).ready := icache.io.memRsp.ready
   // ***********************
   // **** icache memReq ****
-  l1Cache2L2Arb.io.memReqVecIn(0).valid := icache.io.memReq.valid
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_opcode := 4.U(3.W)
+  l1Cache2L2Arb.io.memReqVecIn.get(0).valid := icache.io.memReq.valid
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_opcode := 4.U(3.W)
   //TODO changed to TLAOp_Get when L1param system established
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_addr := icache.io.memReq.bits.a_addr
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_source := icache.io.memReq.bits.a_source
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_data := 0.U.asTypeOf(Vec(dcache_BlockWords, UInt(xLen.W)))
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_mask.foreach{_ := true.B}
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.a_param := DontCare
-  l1Cache2L2Arb.io.memReqVecIn(0).bits.spike_info.foreach { left => left := icache.io.memReq.bits.spike_info.getOrElse(0.U.asTypeOf(new cache_spike_info(mmu.SV32))) }
-  icache.io.memReq.ready := l1Cache2L2Arb.io.memReqVecIn(0).ready
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_addr.get := icache.io.memReq.bits.a_addr.get
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_source := icache.io.memReq.bits.a_source
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_data := 0.U.asTypeOf(Vec(dcache_BlockWords, UInt(xLen.W)))
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_mask.foreach{_ := true.B}
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.a_param := DontCare
+  l1Cache2L2Arb.io.memReqVecIn.get(0).bits.spike_info.foreach { left => left := icache.io.memReq.bits.spike_info.getOrElse(0.U.asTypeOf(new cache_spike_info(mmu.SV32))) }
+  icache.io.memReq.ready := l1Cache2L2Arb.io.memReqVecIn.get(0).ready
   // ***********************
   // **** icache coreReq ****
   pipe.io.icache_req.ready:=icache.io.coreReq.ready
@@ -381,7 +381,10 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   icache.io.coreReq.bits.addr:=pipe.io.icache_req.bits.addr
   icache.io.coreReq.bits.warpid:=pipe.io.icache_req.bits.warpid
   icache.io.coreReq.bits.mask:=pipe.io.icache_req.bits.mask
-  icache.io.coreReq.bits.asid:=pipe.io.icache_req.bits.asid
+  if(MMU_ENABLED){
+    icache.io.coreReq.bits.asid.get := pipe.io.icache_req.bits.asid
+  }
+
   icache.io.coreReq.bits.spike_info.foreach( _ := DontCare )
   // ***********************
   // **** icache coreRsp ****
@@ -406,7 +409,7 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   l1Cache2L2Arb.io.memRspVecOut(1).ready := dcache.io.memRsp.ready
   // ***********************
   // **** dcache memReq ****
-  l1Cache2L2Arb.io.memReqVecIn(1) <> dcache.io.memReq
+  l1Cache2L2Arb.io.memReqVecIn.get(1) <> dcache.io.memReq.get
   // **** dcache coreReq ****
   dcache.io.coreReq <> pipe.io.dcache_req
   // **** dcache coreRsp ****
@@ -448,10 +451,18 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
     }
   }
   // l1i/l1d <-> l1itlb/l1dtlb
-  l1tlb(0).io.in <> icache.io.TLBReq
-  icache.io.TLBRsp <> l1tlb(0).io.out
-  l1tlb(1).io.in <> dcache.io.TLBReq
-  dcache.io.TLBRsp <> l1tlb(1).io.out
+  SV match{
+    case Some(sv) => {
+      l1tlb(0).io.in <> icache.io.TLBReq.get
+      icache.io.TLBRsp.get <> l1tlb(0).io.out
+      l1tlb(1).io.in <> dcache.io.TLBReq.get
+      dcache.io.TLBRsp.get <> l1tlb(1).io.out
+    }
+    case None => {
+
+    }
+  }
+
 
   val sharedmem = Module(new SharedMemory()(param))
   sharedmem.io.coreReq.bits.data:=pipe.io.shared_req.bits.data
@@ -493,7 +504,7 @@ class SM2clusterArbiter(L2param: InclusiveCacheParameters_lite)(implicit p: Para
     else {
       memReqArb.io.in(i).bits.source := Cat(i.asUInt,io.memReqVecIn(i).bits.a_source)
     }
-    memReqArb.io.in(i).bits.address := io.memReqVecIn(i).bits.a_addr
+    memReqArb.io.in(i).bits.address := io.memReqVecIn(i).bits.a_addr.get
     memReqArb.io.in(i).bits.mask := (io.memReqVecIn(i).bits.a_mask).asUInt
     memReqArb.io.in(i).bits.data := io.memReqVecIn(i).bits.a_data.asUInt
     memReqArb.io.in(i).bits.size := 0.U//log2Up(BlockWords*BytesOfWord).U
