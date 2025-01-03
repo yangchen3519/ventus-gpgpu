@@ -13,6 +13,7 @@ package L1Cache.ICache
 import config.config.Parameters
 import L1Cache.{L1TagAccess, L1TagAccess_ICache, RVGParameters}
 import SRAMTemplate.{SRAMReadBus, SRAMTemplate, SRAMWriteBus}
+import chisel3.DontCare.:=
 import chisel3._
 import chisel3.util._
 import mmu.{L1TlbIO, L1TlbReq}
@@ -24,7 +25,7 @@ class ICachePipeReq(SV: mmu.SVParam)(implicit p: Parameters) extends ICacheBundl
   val addr = UInt(WordLength.W)
   val mask = UInt(num_fetch.W)
   val warpid = UInt(WIdBits.W)
-  val asid = UInt(asidLen.W)
+  val asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
   val spike_info=if(SPIKE_OUTPUT) Some(new cache_spike_info(SV)) else None
 }
 class ICachePipeFlush(implicit p: Parameters) extends ICacheBundle{
@@ -50,12 +51,12 @@ class ICacheMemRsp(implicit p: Parameters) extends ICacheBundle{
   val d_data = Vec(BlockWords, UInt(WordLength.W))
 }
 class ICacheMemReq(implicit p: Parameters) extends ICacheBundle{
-  val a_source = UInt(WIdBits.W)
+  val a_source = UInt((WIdBits+log2Up(NMshrEntry)).W)
   val a_addr = UInt(WordLength.W)
 }
 class ICacheMemReq_p(SV: mmu.SVParam)(implicit p: Parameters) extends ICacheBundle{
   val a_source = UInt((WIdBits+log2Up(NMshrEntry)).W)
-  val a_addr = UInt(paLen.W)
+  val a_addr = if(MMU_ENABLED) Some(UInt(paLen.W)) else Some(UInt(vaLen.W))
   val spike_info=if(SPIKE_OUTPUT) Some(new cache_spike_info(SV)) else None
 }
 
@@ -65,8 +66,8 @@ class ICacheExtInf(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) exten
   val coreRsp = DecoupledIO(new ICachePipeRsp)
   val memRsp = Flipped(DecoupledIO(new ICacheMemRsp))
   val memReq = DecoupledIO(new ICacheMemReq_p(SV.getOrElse(mmu.SV32)))
-  val TLBRsp = Flipped(DecoupledIO(new mmu.L1TlbRsp(SV.getOrElse(mmu.SV32))))
-  val TLBReq = DecoupledIO(new mmu.L1TlbReq(SV.getOrElse(mmu.SV32)))
+  val TLBRsp = if(MMU_ENABLED) Some(Flipped(DecoupledIO(new mmu.L1TlbRsp(SV.getOrElse(mmu.SV32))))) else None
+  val TLBReq = if(MMU_ENABLED) Some(DecoupledIO(new mmu.L1TlbReq(SV.getOrElse(mmu.SV32)))) else None
 }
 
 class ASourceRegBundle(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends ICacheBundle {
@@ -118,8 +119,17 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
   val warpid_st2 = RegNext(warpid_st1)
   val mask_st2 = RegNext(mask_st1)
   val addr_st1 = RegEnable(io.coreReq.bits.addr, io.coreReq.ready)
-  val ASID_st2 = RegEnable(io.coreReq.bits.asid, io.coreReq.ready)
   val addr_st2 = RegNext(addr_st1)
+  if(MMU_ENABLED){
+    val ASID_st2 = RegEnable(io.coreReq.bits.asid.get, io.coreReq.ready)
+    val pipeReqAsid_st1 = RegEnable(io.coreReq.bits.asid.get, 0.U(io.coreReq.bits.asid.get.getWidth.W), io.coreReq.fire)
+    tagAccess.io.r_asid.get.req.valid := io.coreReq.fire && !ShouldFlushCoreRsp_st0
+    tagAccess.io.r_asid.get.req.bits.setIdx := get_setIdx(io.coreReq.bits.addr)
+    tagAccess.io.asidFromCore_st1.get := pipeReqAsid_st1
+    tagAccess.io.w_asid.get.req.valid := memRsp_Q.io.deq.fire
+    tagAccess.io.w_asid.get.req.bits(data=mshrAccess.io.missRspOut.bits.ASID.get, setIdx=get_setIdx(mshrAccess.io.missRspOut.bits.blockAddr), waymask = 0.U)
+    mshrAccess.io.missReq.bits.ASID.get := pipeReqAsid_st1
+  }
 
   // ******     external flushPipeline
   //ShouldFlushCoreRsp_st2 := warpid_st2 === io.externalFlushPipe.bits.warpid && io.externalFlushPipe.valid
@@ -127,20 +137,17 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
   ShouldFlushCoreRsp_st0 := io.coreReq.bits.warpid === io.externalFlushPipe.bits.warpid && io.externalFlushPipe.valid
 
   val pipeReqAddr_st1 = RegEnable(io.coreReq.bits.addr, 0.U(io.coreReq.bits.addr.getWidth.W), io.coreReq.fire)
-  val pipeReqAsid_st1 = RegEnable(io.coreReq.bits.asid, 0.U(io.coreReq.bits.asid.getWidth.W), io.coreReq.fire)
+
   // ******      tag read, to handle mem rsp st1 & pipe req st1      ******
   tagAccess.io.r.req.valid := io.coreReq.fire && !ShouldFlushCoreRsp_st0
   tagAccess.io.r.req.bits.setIdx := get_setIdx(io.coreReq.bits.addr)
-  tagAccess.io.r_asid.req.valid := io.coreReq.fire && !ShouldFlushCoreRsp_st0
-  tagAccess.io.r_asid.req.bits.setIdx := get_setIdx(io.coreReq.bits.addr)
+
   tagAccess.io.tagFromCore_st1 := get_tag(pipeReqAddr_st1)
-  tagAccess.io.asidFromCore_st1 := pipeReqAsid_st1
+
   tagAccess.io.coreReqReady := io.coreReq.ready
   // ******      tag write, to handle mem rsp st1 & st2      ******
   tagAccess.io.w.req.valid := memRsp_Q.io.deq.fire
   tagAccess.io.w.req.bits(data=get_tag(mshrAccess.io.missRspOut.bits.blockAddr), setIdx=get_setIdx(mshrAccess.io.missRspOut.bits.blockAddr), waymask = 0.U)
-  tagAccess.io.w_asid.req.valid := memRsp_Q.io.deq.fire
-  tagAccess.io.w_asid.req.bits(data=mshrAccess.io.missRspOut.bits.ASID, setIdx=get_setIdx(mshrAccess.io.missRspOut.bits.blockAddr), waymask = 0.U)
 
   // ******     missReq Queue enqueue     ******
   memRsp_Q.io.enq <> io.memRsp
@@ -150,7 +157,7 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
   // ******     mshrAccess      ******
   mshrAccess.io.missReq.valid := cacheMiss_st1
   mshrAccess.io.missReq.bits.blockAddr := get_blockAddr(pipeReqAddr_st1)
-  mshrAccess.io.missReq.bits.ASID := pipeReqAsid_st1
+
   mshrAccess.io.missReq.bits.targetInfo := Cat(warpid_st1,get_offsets(pipeReqAddr_st1))
   //mshrAccess.io.missReq <> mshrMissReq_Q.io.deq
 
@@ -214,23 +221,38 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
  // mshrAccess.io.miss2mem.ready := io.memReq.ready
  // io.memReq.bits.a_addr := Cat(mshrAccess.io.miss2mem.bits.blockAddr,0.U((32-bABits).W))
  // io.memReq.bits.a_source := mshrAccess.io.miss2mem.bits.instrId
-  io.TLBReq.valid := mshrAccess.io.miss2mem.valid
-  io.TLBReq.bits.vaddr := Cat(mshrAccess.io.miss2mem.bits.blockAddr,0.U((32-bABits).W))
-  io.TLBReq.bits.asid := mshrAccess.io.miss2mem.bits.ASID
-  mshrAccess.io.miss2mem.ready := io.TLBReq.ready
-  val a_source_reg = Module(new Queue(new ASourceRegBundle(SV),1,true,false))
-  a_source_reg.io.enq.valid := io.TLBReq.fire
-  a_source_reg.io.enq.bits.instrId := mshrAccess.io.miss2mem.bits.instrId
-  a_source_reg.io.enq.bits.spike_info.foreach{ left =>
-    left.pc := 0.U
-    left.vaddr := mshrAccess.io.miss2mem.bits.blockAddr
+  if(MMU_ENABLED){
+    io.TLBReq.get.valid := mshrAccess.io.miss2mem.valid
+    io.TLBReq.get.bits.vaddr := Cat(mshrAccess.io.miss2mem.bits.blockAddr,0.U((32-bABits).W))
+    io.TLBReq.get.bits.asid := mshrAccess.io.miss2mem.bits.ASID.get
+    mshrAccess.io.miss2mem.ready := io.TLBReq.get.ready
+    val a_source_reg = Module(new Queue(new ASourceRegBundle(SV),1,true,false))
+    a_source_reg.io.enq.valid := io.TLBReq.get.fire
+    a_source_reg.io.enq.bits.instrId := mshrAccess.io.miss2mem.bits.instrId
+    a_source_reg.io.enq.bits.spike_info.foreach{ left =>
+      left.pc := 0.U
+      left.vaddr := mshrAccess.io.miss2mem.bits.blockAddr
+    }
+    a_source_reg.io.deq.ready := io.memReq.ready && io.TLBRsp.get.valid
+    io.TLBRsp.get.ready := io.memReq.ready
+    io.memReq.bits.a_addr.get := io.TLBRsp.get.bits.paddr
+    io.memReq.bits.a_source := a_source_reg.io.deq.bits.instrId
+    io.memReq.valid := io.TLBRsp.get.valid && a_source_reg.io.deq.valid
+    io.memReq.bits.spike_info.foreach( _ := a_source_reg.io.deq.bits.spike_info.getOrElse(0.U) )
+
+  } else {
+    mshrAccess.io.miss2mem.ready := io.memReq.ready
+    io.memReq.bits.a_addr.get := Cat(mshrAccess.io.miss2mem.bits.blockAddr,0.U((32-bABits).W))
+    io.memReq.bits.a_source := mshrAccess.io.miss2mem.bits.instrId
+    io.memReq.valid := mshrAccess.io.miss2mem.valid
+    io.memReq.bits.spike_info.foreach{ left =>
+      left.pc := 0.U
+      left.vaddr := mshrAccess.io.miss2mem.bits.blockAddr
+    }
+
   }
-  a_source_reg.io.deq.ready := io.memReq.ready && io.TLBRsp.valid
-  io.TLBRsp.ready := io.memReq.ready
-  io.memReq.bits.a_addr := io.TLBRsp.bits.paddr
-  io.memReq.bits.a_source := a_source_reg.io.deq.bits.instrId
-  io.memReq.valid := io.TLBRsp.valid && a_source_reg.io.deq.valid
-  io.memReq.bits.spike_info.foreach( _ := a_source_reg.io.deq.bits.spike_info.getOrElse(0.U) )
+
+
 
   // ******      core req ready
   //val coreRsp_QAlmstFull = coreRsp_Q.io.count === 2.U
