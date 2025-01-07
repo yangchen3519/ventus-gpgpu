@@ -36,7 +36,7 @@ class MetaData{
 
   def generateHostReq(i: BigInt, j: BigInt, k: BigInt, asid: BigInt) = {
     val blockID = (i * kernel_size(1) + j) * kernel_size(2) + k
-    (new host2CTA_data).Lit(
+    val hostReq = (new host2CTA_data).Lit(
       _.host_kernel_asid -> asid.U,
       //_.host_wg_id -> ("b" + blockID.toString(2) + "0" * CU_ID_WIDTH).U,
       _.host_wg_id -> blockID.U,
@@ -56,6 +56,7 @@ class MetaData{
       _.host_pds_size_per_wf -> 0.U,
       _.host_asid -> asid.U
     )
+    hostReq
   }
 }
 
@@ -162,14 +163,16 @@ class MemBox[T <: BaseSV](SV: T) extends Memory(SV.MaxPhyRange, SV) {
   def loadfile(ptbr: BigInt, metaData: MetaData, datafile: String): MetaData = {
     val file = Source.fromFile(datafile)
     var fileBytes = file.getLines().map(Hex2ByteArray(_, 4)).reduce(_ ++ _)
+   // println("#####function loadfile#######")
     // Temporary fix
     tryAllocate(ptbr, BigInt("070000000", 16), 8 * SV.PageSize)
+    //println(s"totally ${metaData.buffer_base.last} allocation")
     for (i <- metaData.buffer_base.indices) {
       val lower = metaData.buffer_base(i)
       // Temporary fix
       val real_size = if(lower == BigInt("080000000", 16)) 8 * SV.PageSize else metaData.buffer_size(i).toInt
       val upper = lower + real_size - (lower + real_size) % SV.PageSize
-
+      //println(s"+++++${i} indices, real size is ${real_size}, meta Data buffersize is ${metaData.buffer_size(i).toInt}")
       if(real_size > 0){
         if (metaData.lds_mem_index.contains(i)) { // dynamic
           tryAllocate(ptbr, lower, real_size)
@@ -177,11 +180,14 @@ class MemBox[T <: BaseSV](SV: T) extends Memory(SV.MaxPhyRange, SV) {
         }
         else { // static
           val alloc_pa = allocateMemory(ptbr, lower, real_size)
+         // println(f"allocate memory at allc_pa: 0x$alloc_pa%x ")
           writeDataPhysical(alloc_pa, real_size, fileBytes.take(real_size))
         }
       }
       fileBytes = fileBytes.drop(metaData.buffer_size(i).toInt)
     }
+//    println(s"kernel id: ${metaData.kernel_id}, wf size: ${metaData.wf_size}")
+//    println(s"kernelsize 0:${metaData.kernel_size(0)}, size 1:${metaData.kernel_size(1)},size2:${metaData.kernel_size(2)} ")
     metaData
   }
 }

@@ -19,7 +19,7 @@ class ICachePipeReq_np extends Bundle {
   val addr = UInt(32.W)
   val mask = UInt(num_fetch.W)
   val warpid = UInt(depth_warp.W)
-  val asid = UInt(KNL_ASID_WIDTH.W)
+  val asid = if(MMU_ENABLED) Some(UInt(KNL_ASID_WIDTH.W)) else None
 }
 class ICachePipeRsp_np extends Bundle{
   val addr = UInt(32.W)
@@ -169,8 +169,10 @@ class pipe(val sm_id: Int = 0) extends Module{
   ibuffer.io.in.bits.control := control.io.control
   ibuffer.io.in.bits.control_mask := control.io.control_mask
   ibuffer.io.in.valid:=io.icache_rsp.valid& !io.icache_rsp.bits.status(0)
-  for( i <- 0 until num_fetch){
-    ibuffer.io.in.bits.control(i).asid := warp_sche.io.asid
+  if(MMU_ENABLED) {
+    for (i <- 0 until num_fetch) {
+      ibuffer.io.in.bits.control(i).asid.get := warp_sche.io.asid.get
+    }
   }
   ibuffer.io.flush_wid:=warp_sche.io.flush
 

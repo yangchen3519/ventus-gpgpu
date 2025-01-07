@@ -67,7 +67,8 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
       l2cs = num_l2cache
     ),
     InclusiveCacheMicroParameters(l2cache_writeBytes, l2cache_memCycles, l2cache_portFactor, num_warp, num_sm,num_sm_in_cluster,num_cluster,dcache_MshrEntry,dcache_NSets),
-    false
+    false,
+    MMU_ENABLED
   )
 
   val io = IO(new Bundle {
@@ -75,7 +76,7 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
     val host_rsp = DecoupledIO(new CTA2host_data)
     val out_a = Decoupled(new TLBundleA_lite(l2cache_params))           // L2 cache request
     val out_d = Flipped(Decoupled(new TLBundleD_lite(l2cache_params)))  // L2 cache response
-    val asid_fill = Flipped(ValidIO(new AsidLookupEntry(SV.getOrElse(mmu.SV32))))
+    val asid_fill = if(MMU_ENABLED) Some(Flipped(ValidIO(new AsidLookupEntry(SV.getOrElse(mmu.SV32))))) else None
     val cnt = Output(UInt(32.W))
     val inst_cnt = if(INST_CNT) Some(Output(Vec(num_sm, UInt(32.W)))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(num_sm, Vec(2, UInt(32.W))))) else None
@@ -92,7 +93,10 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
   GPU.suggestName("GPU")
 
   GPU.io.cycle_cnt := counter.value
-  GPU.io.asid_fill.foreach{ _ <> io.asid_fill }
+  if(MMU_ENABLED){
+    GPU.io.asid_fill.foreach{ _ <> io.asid_fill.get
+  }
+  }
 
   val pipe_a = Module(new DecoupledPipe(new TLBundleA_lite(l2cache_params), 2))
   val pipe_d = Module(new DecoupledPipe(new TLBundleD_lite(l2cache_params), 2))

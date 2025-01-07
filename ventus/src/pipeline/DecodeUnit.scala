@@ -569,7 +569,9 @@ class InstrDecodeV2 extends Module {
       ))
   })
   (ctrlSignals zip io.control).zipWithIndex.foreach{ case((s, c), i) =>
-    c.asid := DontCare
+    if(MMU_ENABLED) {
+      c.asid.get := DontCare
+    }
     c.inst := io.inst(i)
     c.wid := io.wid
     c.pc := io.pc + (i.U << 2.U) // for multi-fetching

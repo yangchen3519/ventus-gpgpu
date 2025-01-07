@@ -375,6 +375,7 @@ class L1TagAccess_ICache(set: Int, way: Int, tagBits: Int, AsidBits: Int)extends
     singlePort = false,
     bypassWrite = false
   ))
+  tagBodyAccess.io.r <> io.r
 
   val way_valid = RegInit(VecInit(Seq.fill(set)(VecInit(Seq.fill(way)(0.U(1.W))))))
   //val way_valid = Mem(set, UInt(way.W))
@@ -394,7 +395,7 @@ class L1TagAccess_ICache(set: Int, way: Int, tagBits: Int, AsidBits: Int)extends
       singlePort = false,
       bypassWrite = false
     ))
-    tagBodyAccess.io.r <> io.r
+
     asidAccess.io.r <> io.r_asid.get
     iTagChecker.io.ASID_of_set.get := asidAccess.io.r.resp.data
     iTagChecker.io.ASID_from_pipe.get := io.asidFromCore_st1.get
@@ -405,7 +406,6 @@ class L1TagAccess_ICache(set: Int, way: Int, tagBits: Int, AsidBits: Int)extends
   iTagChecker.io.way_valid := way_valid(RegEnable(io.r.req.bits.setIdx, io.coreReqReady)) //st1
   io.waymaskHit_st1 := iTagChecker.io.waymask //st1
   io.hit_st1 := iTagChecker.io.cache_hit
-
 
   Replacement.io.validbits_of_set := Cat(way_valid(io.w.req.bits.setIdx))
   io.waymaskReplacement := Replacement.io.waymask
