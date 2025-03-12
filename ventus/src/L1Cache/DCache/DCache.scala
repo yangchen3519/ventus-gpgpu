@@ -58,6 +58,9 @@ class genControl extends Module{
         io.control.isRead := true.B
       }.elsewhen(io.param === 1.U) {
         io.control.isLR := true.B
+        io.control.isUncached := true.B
+      }.elsewhen(io.param === 2.U){
+        io.control.isUncached := true.B
       }
     }
     is(1.U){
@@ -65,10 +68,14 @@ class genControl extends Module{
         io.control.isWrite := true.B
       }.elsewhen(io.param === 1.U) {
         io.control.isSC := true.B
+        io.control.isUncached := true.B
+      }.elsewhen(io.param === 2.U){
+        io.control.isUncached := true.B
       }
     }
     is(2.U){
       io.control.isAMO := true.B
+      io.control.isUncached := true.B
     }
     is(3.U){
       when(io.param === 0.U) {
@@ -179,6 +186,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
 
   val TagAccess = Module(new L1TagAccess(set=NSets, way=NWays, tagBits=TagBits,readOnly=false))
   val WshrAccess = Module(new DCacheWSHR(Depth = NWshrEntry))
+  val ReplayTable = Module(new L1RTAB())
   val mshrProbeStatus = MshrAccess.io.probeOut_st1.probeStatus//Alias
   // ******     queues     ******
   val coreReq_Q = Module(new Queue(new DCacheCoreReq,entries = 1,flow=false,pipe=true))
@@ -339,7 +347,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
   coreReq_st1_PerLaneAddr_Remap := remapDataPerWord.io.perLaneAddrRemap
   coreReq_st1_data_map_sameword := remapDataPerWord.io.dataout
 
-  writeMissReq.a_opcode := 1.U //PutPartialData:Get
+  writeMissReq.a_opcode := TLAOp_PutPart//1.U //PutPartialData:Get
   writeMissReq.a_param := 0.U //regular write
   writeMissReq.a_source := DontCare//wait for WSHR
   writeMissReq.a_addr := Cat(coreReq_st1.tag, coreReq_st1.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
@@ -361,7 +369,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
   writeMissReq.hasCoreRsp := true.B
   writeMissReq.coreRspInstrId := coreReq_st1.instrId
 
-  readMissReq.a_opcode := 4.U //Get
+  readMissReq.a_opcode := TLAOp_Get//4.U //Get
   readMissReq.a_param := 0.U //regular read
   readMissReq.a_source := Cat("d1".U, MshrAccess.io.probeOut_st1.a_source, coreReq_st1.setIdx)//setIdx for memRsp tag access in 1st stage
   readMissReq.a_addr := Cat(coreReq_st1.tag, coreReq_st1.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
@@ -738,7 +746,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
   // todo use dirtyreplace io to do uncached evict
   MemReqArb.io.in(0).valid := tagReplaceStatus
   MemReqArb.io.in(0).bits := dirtyReplace_st1
-  MemReqArb.io.in(1).valid := coreReq_st1_valid  && coreReq_Q.io.deq.fire() && ((writeMiss_st1 || readMiss_st1) && mshrProbeStatus === 0.U) //&& !injectTagProbe
+  MemReqArb.io.in(1).valid := coreReq_st1_valid  && coreReq_Q.io.deq.fire && ((writeMiss_st1 || readMiss_st1) && mshrProbeStatus === 0.U) //&& !injectTagProbe
   MemReqArb.io.in(1).bits := missMemReq
   MemReqArb.io.in(2).valid := Mux(invalidatenodirty,flushL2 && WshrAccess.io.empty,RegNext(InvOrFluMemReqValid_st1))
   MemReqArb.io.in(2).bits := InvOrFluMemReq

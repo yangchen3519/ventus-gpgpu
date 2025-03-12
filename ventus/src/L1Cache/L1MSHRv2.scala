@@ -18,7 +18,7 @@ import chisel3.util._
 import top.parameters._
 
 //abstract class MSHRBundle extends Bundle with L1CacheParameters
-
+/*
 class MSHRprobe(val bABits: Int) extends Bundle {
   val blockAddr = UInt(bABits.W)
 }
@@ -364,4 +364,4 @@ class MSHRv2(val bABits: Int, val MshrSet: Int,val MshrSetBits: Int, val MshrTag
     } //order of when & elsewhen matters, as elsewhen cover some cases of when, but no op to them
   }
 }
-
+*/

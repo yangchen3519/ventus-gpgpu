@@ -46,27 +46,47 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   //                                       |   blockOffset  |
   //                                     bankOffset       wordOffset
   // |32      tag       22|21   setIdx   11|10 9|8 bankIdx 2|1 0|
+ //For RTAB request
   def NRTABs: Int = 4
+  def UCacheHitDirty: UInt = 1.U(4.W)
+  def SubEntryFull: UInt = 2.U(4.W)
+  def HitSMSHR: UInt = 3.U(4.W)
+  def EntryFull: UInt = 4.U(4.W)
+  def readHitWSHR: UInt = 5.U(4.W)
+  def writeMissHitMSHR: UInt = 6.U(4.W)
+  def writeMissHitWSHR: UInt = 7.U(4.W)
+  def hitRTAB: UInt = 8.U(4.W)
   //TL params
-  def TLAOp_Get: UInt = 4.U(3.W)
-  def TLAOp_PutFull: UInt = 0.U(3.W)
-  def TLAOp_PutPart: UInt = 1.U(3.W)
-  def TLAOp_Flush: UInt = 5.U(3.W)
-  def TLAParam_Flush : UInt = 0.U(3.W)
-  def TLAParam_Inv : UInt = 1.U(3.W)
-  def TLAOp_Arith: UInt = 2.U(3.W)
-  def TLAOp_Logic: UInt = 3.U(3.W)
+  def TLAOp_Get       : UInt = 4.U(3.W)
+  def TLAOp_PutFull   : UInt = 0.U(3.W)
+  def TLAOp_PutPart   : UInt = 1.U(3.W)
+  def TLAOp_Flush     : UInt = 5.U(3.W)
+  def TLAParam_Flush  : UInt = 0.U(3.W)
+  def TLAParam_Inv    : UInt = 1.U(3.W)
+  def TLAOp_Arith     : UInt = 2.U(3.W)
+  def TLAOp_Logic     : UInt = 3.U(3.W)
 
-  def TLAParam_ArithMin : UInt = 0.U(3.W)
-  def TLAParam_ArithMax : UInt = 1.U(3.W)
-  def TLAParam_ArithMinu : UInt = 2.U(3.W)
-  def TLAParam_ArithMaxu : UInt = 3.U(3.W)
-  def TLAParam_ArithAdd : UInt = 4.U(3.W)
-  def TLAParam_LogicXor : UInt = 0.U(3.W)
-  def TLAParam_LogicOr : UInt = 1.U(3.W)
-  def TLAParam_LogicAnd : UInt = 2.U(3.W)
-  def TLAParam_LogicSwap : UInt = 3.U(3.W)
-  def TLAParam_LRSC : UInt = 1.U(3.W)
+  def TLAParam_ArithMin   : UInt = 0.U(3.W)
+  def TLAParam_ArithMax   : UInt = 1.U(3.W)
+  def TLAParam_ArithMinu  : UInt = 2.U(3.W)
+  def TLAParam_ArithMaxu  : UInt = 3.U(3.W)
+  def TLAParam_ArithAdd   : UInt = 4.U(3.W)
+  def TLAParam_LogicXor   : UInt = 0.U(3.W)
+  def TLAParam_LogicOr    : UInt = 1.U(3.W)
+  def TLAParam_LogicAnd   : UInt = 2.U(3.W)
+  def TLAParam_LogicSwap  : UInt = 3.U(3.W)
+  def TLAParam_LRSC       : UInt = 1.U(3.W)
+
+  //LSU Param
+  def LSUSwapParam   : UInt =16.U(4.W)
+  def LSUAddParam    : UInt = 0.U(4.W)
+  def LSUXorParam    : UInt = 1.U(4.W)
+  def LSUAndParam    : UInt = 3.U(4.W)
+  def LSUOrParam     : UInt = 2.U(4.W)
+  def LSUMinParam    : UInt = 4.U(4.W)
+  def LSUMaxParam    : UInt = 5.U(4.W)
+  def LSUMinuParam   : UInt = 6.U(4.W)
+  def LSUMaxuParam   : UInt = 7.U(4.W)
 }
 abstract class DCacheBundle(implicit val p: Parameters) extends Bundle with HasDCacheParameter
 abstract class DCacheModule(implicit val p: Parameters) extends Module with HasDCacheParameter
