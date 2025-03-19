@@ -61,6 +61,7 @@ class genControl extends Module{
         io.control.isUncached := true.B
       }.elsewhen(io.param === 2.U){
         io.control.isUncached := true.B
+        io.control.isRead := true.B
       }
     }
     is(1.U){
@@ -71,6 +72,7 @@ class genControl extends Module{
         io.control.isUncached := true.B
       }.elsewhen(io.param === 2.U){
         io.control.isUncached := true.B
+        io.control.isWrite := true.B
       }
     }
     is(2.U){
@@ -155,6 +157,85 @@ class relocateDataByte(numdata:Int, NLanes:Int) extends Module{
       io.DataOut(i) := io.OriData(i) >> 16
     }.otherwise{
       io.DataOut(i) := io.OriData(i)
+    }
+  }
+}
+
+class ProConver(implicit p: Parameters) extends DCacheModule{
+  val io = IO(new Bundle {
+    val coreReqCtrl   = Input(new DCacheControl())
+    val coreReqParam  = Input(UInt(4.W))
+    val hit_dirty     = Input(Bool())
+    val memReq_a_opcode = Output(UInt(3.W))
+    val memReq_a_param  = Output(UInt(3.W))
+  })
+  val TLA_Atomic_Param = Wire(UInt(3.W))
+  val TLA_Atomic_Opcode = Wire(UInt(3.W))
+  io.memReq_a_opcode := TLAOp_Get
+  io.memReq_a_param := 0.U
+  when(!io.coreReqCtrl.isUncached){
+    when(io.coreReqCtrl.isRead) {
+      io.memReq_a_opcode := TLAOp_Get
+      io.memReq_a_param := 0.U
+    }.elsewhen(io.coreReqCtrl.isWrite){
+      io.memReq_a_opcode := TLAOp_PutPart
+      io.memReq_a_param := 0.U
+    }
+  }.otherwise{
+    when(io.hit_dirty){
+      io.memReq_a_opcode := TLAOp_PutFull
+      io.memReq_a_param := 0.U
+    }.otherwise{
+      when(io.coreReqCtrl.isLR){
+        io.memReq_a_opcode := TLAOp_Get
+        io.memReq_a_param := 1.U
+      }.elsewhen(io.coreReqCtrl.isSC){
+        io.memReq_a_opcode := TLAOp_PutPart
+        io.memReq_a_param := 1.U
+      }.elsewhen(io.coreReqCtrl.isAMO) {
+        io.memReq_a_opcode := TLA_Atomic_Opcode
+        io.memReq_a_param := TLA_Atomic_Param
+      }
+    }
+  }
+  TLA_Atomic_Opcode := TLAOp_Arith
+  TLA_Atomic_Param := TLAParam_ArithAdd
+  switch(io.coreReqParam){
+    is(LSUAddParam) {
+      TLA_Atomic_Opcode := TLAOp_Arith
+      TLA_Atomic_Param := TLAParam_ArithAdd
+    }
+    is(LSUXorParam) {
+      TLA_Atomic_Opcode := TLAOp_Logic
+      TLA_Atomic_Param := TLAParam_LogicXor
+    }
+    is(LSUOrParam) {
+      TLA_Atomic_Opcode := TLAOp_Logic
+      TLA_Atomic_Param := TLAParam_LogicOr
+    }
+    is(LSUAndParam) {
+      TLA_Atomic_Opcode := TLAOp_Logic
+      TLA_Atomic_Param := TLAParam_LogicAnd
+    }
+    is(LSUMinParam) {
+      TLA_Atomic_Opcode := TLAOp_Arith
+      TLA_Atomic_Param := TLAParam_ArithMin
+    }
+    is(LSUMaxParam) {
+      TLA_Atomic_Opcode := TLAOp_Arith
+      TLA_Atomic_Param := TLAParam_ArithMax
+    }
+    is(LSUMinuParam) {
+      TLA_Atomic_Opcode := TLAOp_Arith
+      TLA_Atomic_Param := TLAParam_ArithMinu
+    }
+    is(LSUMaxuParam) {
+      TLA_Atomic_Opcode := TLAOp_Arith
+      TLA_Atomic_Param := TLAParam_ArithMaxu
+    }
+    is(LSUSwapParam){
+      TLA_Atomic_Opcode := TLAOp_Logic
+      TLA_Atomic_Param := TLAParam_LogicSwap
     }
   }
 }

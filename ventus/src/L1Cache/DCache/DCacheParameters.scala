@@ -87,6 +87,14 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   def LSUMaxParam    : UInt = 5.U(4.W)
   def LSUMinuParam   : UInt = 6.U(4.W)
   def LSUMaxuParam   : UInt = 7.U(4.W)
+
+  //MSHR status
+  def PrimaryAvail : UInt = 0.U(3.W)
+  def PrimaryFull  : UInt = 1.U(3.W)
+  def SecondaryAvail : UInt = 2.U(3.W)
+  def SecondaryFull : UInt = 3.U(3.W)
+  def SecondaryFullRet : UInt = 4.U(3.W)
+
 }
 abstract class DCacheBundle(implicit val p: Parameters) extends Bundle with HasDCacheParameter
 abstract class DCacheModule(implicit val p: Parameters) extends Module with HasDCacheParameter

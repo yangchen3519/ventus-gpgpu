@@ -8,6 +8,10 @@ import top.parameters._
 class WSHRreq extends Bundle{
   val blockAddr = UInt((dcache_SetIdxBits+dcache_TagBits).W)
 }
+class WSHRCheckResult(Depth:Int) extends Bundle{
+  val Hit = Bool()
+  val HitIdx = UInt(log2Up(Depth).W)
+}
 class DCacheWSHR(Depth:Int) extends Module{
   val io = IO(new Bundle{
     //push

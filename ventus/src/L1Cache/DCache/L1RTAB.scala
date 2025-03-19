@@ -77,7 +77,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     io.RTABReq_st0.valid && io.RTABReq_st1.valid // st0 request match in st1 request
   val bAMatchIdx = OHToUInt(Cat(bAMatch_st0))
 
-  io.checkRTABhit := bAMatch_st0//will ready st0, but not valid st1 <- request will be in RTAB
+  io.checkRTABhit := bAMatch_st0 || bAMatch_st1//will ready st0, but not valid st1 <- request will be in RTAB
 
 
   ptrEnqValid := false.B
