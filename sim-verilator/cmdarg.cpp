@@ -87,6 +87,10 @@ int parse_arg(
                 }
                 config->sim_time_max = simtime;
             }
+        } else if (args[argid] == "--waveform") {
+            config->waveform.enable = true;
+            config->waveform.time_begin = 0;
+            config->waveform.time_end = -1;
         } else if (args[argid] == "--snapshot") {
             if (++argid >= args.size()) {
                 cmdarg_error(std::vector<std::string>(args.begin() + argid - 1, args.end()));

@@ -32,10 +32,11 @@ int main(int argc, char* argv[]) {
     ventus_rtlsim_get_default_config(&sim_config);
 
     sim_config.log.console.level = "trace";
-    sim_config.sim_time_max = 800000;
+    sim_config.sim_time_max = 200000;
     sim_config.pmem.auto_alloc = true;
-    sim_config.waveform.time_begin = 20000;
-    sim_config.waveform.time_end = 30000;
+    sim_config.waveform.enable = false;
+    sim_config.waveform.time_begin = 0;
+    sim_config.waveform.time_end = -1;
     sim_config.verilator.argc = sizeof(verilator_argv) / sizeof(verilator_argv[0]);
     sim_config.verilator.argv = verilator_argv;
     ventus_rtlsim_config_t sim_config_1 = sim_config; // not needed
@@ -99,6 +100,7 @@ void kernel_load_data_callback(const metadata_t* metadata) {
     int bufferIndex = 0;
     std::vector<uint8_t> buffer;
     for (int bufferIndex = 0; bufferIndex < metadata->num_buffer; bufferIndex++) {
+        assert(metadata->buffer_size[bufferIndex] % 4 == 0);
         buffer.reserve(metadata->buffer_size[bufferIndex]); // 提前分配空间
         int readbytes = 0;
         while (readbytes < metadata->buffer_size[bufferIndex]) {
