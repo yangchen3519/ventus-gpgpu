@@ -284,7 +284,8 @@ void ventus_rtlsim_t::destructor(bool snapshot_rollback_forcing) {
         }
     }
 
-    tfp->close();
+    if (tfp)
+        tfp->close();
     dut->final();                  // Final model cleanup
     contextp->statsPrintSummary(); // Final simulation summary
 
@@ -301,7 +302,8 @@ void ventus_rtlsim_t::destructor(bool snapshot_rollback_forcing) {
 
     delete dut;
     delete cta;
-    delete tfp;
+    if (tfp)
+        delete tfp;
     delete contextp; // log system use this to get time
 }
 
