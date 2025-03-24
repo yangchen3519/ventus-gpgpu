@@ -70,9 +70,12 @@ bool Cta::apply_to_dut(Vdut* dut) {
         uint32_t idx_in_kernel = kernel->get_next_wg_idx_in_kernel();
         dim3_t kernel_size_3d = kernel->get_num_wg_3d();
         dut->io_host_req_bits_host_wg_id = kernel->get_next_wgid();
-        dut->io_host_req_bits_host_kernel_size_3d_0 = kernel_size_3d.x;
-        dut->io_host_req_bits_host_kernel_size_3d_1 = kernel_size_3d.y;
-        dut->io_host_req_bits_host_kernel_size_3d_2 = kernel_size_3d.z;
+        // TODO: temporary solution, need to be fixed
+        // RTL uses kernel_size_3d as wg_id_3d currently
+        dim3_t wgidx_3d = kernel->get_next_wg_idx3d_in_kernel();
+        dut->io_host_req_bits_host_kernel_size_3d_0 = wgidx_3d.x;
+        dut->io_host_req_bits_host_kernel_size_3d_1 = wgidx_3d.y;
+        dut->io_host_req_bits_host_kernel_size_3d_2 = wgidx_3d.z;
         dut->io_host_req_bits_host_num_wf = kernel->get_num_wf();
         dut->io_host_req_bits_host_wf_size = kernel->get_num_thread();
         dut->io_host_req_bits_host_lds_size_total = kernel->get_num_lds();
