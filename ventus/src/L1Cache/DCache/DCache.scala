@@ -35,6 +35,7 @@ class DCacheControl extends Bundle{
   val isInvalidate = Bool()
   val isWaitMSHR = Bool()
   val isUncached = Bool()
+  val isFluInvL2 = Bool()
 }
 
 class genControl extends Module{
@@ -51,7 +52,7 @@ class genControl extends Module{
   io.control.isFlush := false.B
   io.control.isInvalidate := false.B
   io.control.isWaitMSHR := false.B
-
+  io.control.isFluInvL2 := false.B
   switch(io.opcode){
     is(0.U){
       when(io.param === 0.U){
@@ -82,8 +83,10 @@ class genControl extends Module{
     is(3.U){
       when(io.param === 0.U) {
         io.control.isInvalidate := true.B
+        io.control.isFluInvL2 := true.B
       }.elsewhen(io.param === 1.U) {
         io.control.isFlush := true.B
+        io.control.isFluInvL2 := true.B
       }.elsewhen(io.param === 2.U){
         io.control.isWaitMSHR := true.B
       }
@@ -138,7 +141,46 @@ class genDataMapSameWord(implicit p: Parameters) extends DCacheModule{
       wordOffsetRemap(i)(j) := Mux(blockOffsetMatch(i)(j),io.perLaneAddr(j).wordOffset1H,0.U)
       dataRemap(i)(j) := Mux(blockOffsetMatch(i)(j),io.datain(j),0.U)
     }
+  }
+}
+//map coreReq data to memReq data
+class dataReqCrossBar(implicit p: Parameters) extends DCacheModule{
+  val io = IO(new Bundle{
+    val dataIn = Input(Vec(NLanes,UInt(WordLength.W)))
+    val perLaneAddrIn = Input(Vec(NLanes, new DCachePerLaneAddr))
+    val dataOut = Output(Vec(dcache_BlockWords, UInt(WordLength.W)))
+    val MaskOut = Output(Vec(dcache_BlockWords,UInt(BytesOfWord.W)))
+  })
+  val LaneBlockConv = Wire(Vec(dcache_BlockWords,Vec(NLanes,UInt(1.W))))
+  val WordOffsetConv = Wire(Vec(dcache_BlockWords,UInt(BytesOfWord.W)))
+  val data_map_byte = Wire(Vec(NLanes,UInt(WordLength.W)))
+  val data_map_sameword = Wire(Vec(NLanes,UInt(WordLength.W)))
+  val PerLaneAddr_Remap = Wire(Vec(NLanes,new DCachePerLaneAddr))
+  val DataMapByte = Module(new genDataMapPerByte(dcache_BlockWords,NLanes)) // shift bytes into right position, according to perLaneAddr
+  val DataMapSameWord = Module(new genDataMapSameWord)
 
+  DataMapByte.io.OriData := io.dataIn
+  DataMapByte.io.offsetMask := io.perLaneAddrIn.map(_.wordOffset1H)
+  data_map_byte := DataMapByte.io.DataOut
+
+  DataMapSameWord.io.perLaneAddr := io.perLaneAddrIn
+  DataMapSameWord.io.datain := data_map_byte
+  data_map_sameword := DataMapSameWord.io.dataout
+  PerLaneAddr_Remap := DataMapSameWord.io.perLaneAddrRemap
+
+   for(j<-0 until dcache_BlockWords) {
+    for (i <- 0 until NLanes) {
+      when(io.perLaneAddrIn(i).blockOffset === j.asUInt && io.perLaneAddrIn(i).activeMask) {
+        LaneBlockConv(j)(i) := 1.U
+      }.otherwise {
+        LaneBlockConv(j)(i) := 0.U
+      }
+    }
+  }
+
+    for(j<-0 until dcache_BlockWords){
+    io.dataOut(j) := data_map_sameword.zip(LaneBlockConv(j)).map{case(a,b) => Mux(b.asBool,a, 0.U)}.reduce(_ | _)
+    io.MaskOut(j) := PerLaneAddr_Remap.zip(LaneBlockConv(j)).map{case(a,b) => Mux(b.asBool, a.wordOffset1H,0.U)}.reduce(_|_)
   }
 }
 

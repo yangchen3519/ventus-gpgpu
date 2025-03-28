@@ -31,12 +31,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     //st0
     val CoreReq = Flipped(DecoupledIO(new DCacheCoreReq))
     val RTABHit = Input(Bool())
+    val hasDirty = Input(Bool())
+    val MSHREmpty = Input(Bool())
+    val SMSHREmpty = Input(Bool())
 
     val Probe_MSHR = Output(new MSHRprobe(bABits))
     val Probe_SMSHR = Output(new MSHRprobe(bABits))//TODO add special MSHR
     val Probe_tA = Output(new SRAMBundleA(NSets))  // todo have ready issue
     val Probe_tA_ready = Input(Bool())
-    val Req_st0_RTAB = Output(new RTABReq())
+    val Req_st0_RTAB = Valid(new RTABReq())
+
     val st0_ready = Output(Bool())
     val st0_valid = Output(Bool())
 
@@ -73,7 +77,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val Control = Module(new genControl)
 
   //====== st1 =======
-  val CoreReq_pipeReg_st1 = Module(new Queue(new CoreReqPipe_st1,entries = 1,flow=false,pipe=true)).io
+  val CoreReq_pipeReg_st0_st1 = Module(new Queue(new CoreReqPipe_st1,entries = 1,flow=false,pipe=true)).io
   val ReplayType = Wire(UInt(4.W))
   val MshrIdx = Wire(UInt(log2Up(NMshrEntry).W))
   val WshrIdx = Wire(UInt(log2Up(NWshrEntry).W))
@@ -83,7 +87,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val missMemReq_st1 = Wire(new WshrMemReq)
 
   //====== st2 ======
-  val CoreRsp_pipeReg_st2 = Module(new Queue(new CoreRspPipe_st2,entries = 1, pipe = true,flow = false)).io
+  val CoreRsp_pipeReg_st1_st2 = Module(new Queue(new CoreRspPipe_st2,entries = 1, pipe = true,flow = false)).io
   val DataMemOrder_st2 = Wire(Vec(BlockWords, UInt(WordLength.W)))
   val DataCoreOrder_st2 = Wire(Vec(NLanes, UInt(WordLength.W)))
   val coreReq_st2_ready = Wire(Bool())
@@ -104,28 +108,76 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   //output bits
   io.Probe_MSHR.blockAddr := BlockAddr_st0
   io.Probe_tA.setIdx := io.CoreReq.bits.setIdx
-  io.Req_st0_RTAB.CoreReqData := io.CoreReq.bits
-  io.Req_st0_RTAB.ReqType     := DontCare
-  io.Req_st0_RTAB.mshrIdx     := DontCare
-  io.Req_st0_RTAB.wshrIdx     := DontCare
+  io.Req_st0_RTAB.bits.CoreReqData := io.CoreReq.bits
+  io.Req_st0_RTAB.bits.ReqType     := DontCare
+  io.Req_st0_RTAB.bits.mshrIdx     := DontCare
+  io.Req_st0_RTAB.bits.wshrIdx     := DontCare
+  io.Req_st0_RTAB.valid            := io.RTABHit && io.CoreReq.valid
   io.CoreReq.ready := st0_ready
-
+  //Flush L2 FSM
+  val idle :: flushing :: responding :: Nil = Enum(3)
+  val FlushInvstateReg = RegInit(idle)
+  // todo: add FSM defination
+  when(FlushInvstateReg === idle){
+    when(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && CoreReqControl_st0.isFluInvL2){
+      FlushInvstateReg := flushing
+  }.elsewhen(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)){
+    FlushInvstateReg := responding
+  }
+  }.elsewhen(FlushInvstateReg === flushing){
+//TODO add memRsp connection
+  }.elsewhen(FlushInvstateReg === responding){
+    when(st0_ready){
+      FlushInvstateReg := idle
+    }
+  }
   // valid ready
-  st0_valid := io.CoreReq.valid && !(io.RTABHit) && io.Probe_tA_ready
-  st0_ready := io.Probe_tA_ready && CoreReq_pipeReg_st1.enq.ready
+  // st0 st1 pipe reg enq valid
+  st0_valid := false.B
+  st0_ready := false.B
+  when(!io.RTABHit ){
+    // probe SMSHR MSHR and tag
+    when(CoreReqControl_st0.isRead || CoreReqControl_st0.isWrite|| CoreReqControl_st0.isAMO || CoreReqControl_st0.isLR || CoreReqControl_st0.isSC){
+      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready
+      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready
+    }.elsewhen(CoreReqControl_st0.isWaitMSHR){
+      //wait until MSHR empty
+      st0_valid  := io.CoreReq.valid && io.MSHREmpty && io.SMSHREmpty
+      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.MSHREmpty && io.SMSHREmpty
+    }.elsewhen(CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate){
+      when(io.hasDirty){
+        //write back dirty cacheline
+        st0_valid  := io.CoreReq.valid
+        st0_ready := false.B
+      }.otherwise{
+        when(FlushInvstateReg === idle){
+          st0_valid  := io.CoreReq.valid && io.Probe_tA_ready
+          st0_ready := false.B
+        }.elsewhen(FlushInvstateReg === flushing){
+          st0_valid := false.B
+          st0_ready := false.B
+        }.elsewhen(FlushInvstateReg === responding){
+          st0_valid := io.CoreReq.valid
+          st0_ready := CoreReq_pipeReg_st0_st1.enq.ready
+        }
+      }
+    }
+  }
+
+  //st0_ready := io.Probe_tA_ready && CoreReq_pipeReg_st0_st1.enq.ready
   // =============
   // st1 pipe reg
-  val BlockAddr_st1 =  Cat(CoreReq_pipeReg_st1.deq.bits.Req.tag, CoreReq_pipeReg_st1.deq.bits.Req.setIdx)
-  CoreReq_pipeReg_st1.enq.valid := st0_valid
-  CoreReq_pipeReg_st1.enq.bits.Req := io.CoreReq.bits
-  CoreReq_pipeReg_st1.enq.bits.Ctrl := CoreReqControl_st0
+  val BlockAddr_st1 = Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
+  CoreReq_pipeReg_st0_st1.enq.valid := st0_valid
+  CoreReq_pipeReg_st0_st1.enq.bits.Req := io.CoreReq.bits
+  CoreReq_pipeReg_st0_st1.enq.bits.Ctrl := CoreReqControl_st0
   //=== st1 ===
 
-  io.tagFromCore_tA_st1 := CoreReq_pipeReg_st1.deq.bits.Req.tag // check the tag from core with tag from tA block
-  io.coreReq_Control_st1 := CoreReq_pipeReg_st1.deq.bits.Ctrl
-  val Control_st1 = CoreReq_pipeReg_st1.deq.bits.Ctrl
-  io.read_Req_dA.foreach(_.setIdx := Cat(CoreReq_pipeReg_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
-  io.Req_st1_RTAB.bits.CoreReqData := CoreReq_pipeReg_st1.deq.bits.Req
+  io.tagFromCore_tA_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.tag // check the tag from core with tag from tA block
+  io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
+  val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
+  io.read_Req_dA.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
+  io.Req_st1_RTAB.bits.CoreReqData := CoreReq_pipeReg_st0_st1.deq.bits.Req
   io.Req_st1_RTAB.bits.ReqType     := ReplayType
   io.Req_st1_RTAB.bits.mshrIdx     := MshrIdx
   io.Req_st1_RTAB.bits.wshrIdx     := WshrIdx
@@ -173,19 +225,19 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //MSHR miss Req
   val mshrMissReqTI = Wire(new VecMshrTargetInfo)
-  mshrMissReqTI.instrId := CoreReq_pipeReg_st1.deq.bits.Req.instrId
-  mshrMissReqTI.perLaneAddr := CoreReq_pipeReg_st1.deq.bits.Req.perLaneAddr
+  mshrMissReqTI.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
+  mshrMissReqTI.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
   io.MissReq_MSHR.valid := ReadMiss_st1 && st1_valid
   io.MissReq_MSHR.bits.blockAddr := BlockAddr_st1
   io.MissReq_MSHR.bits.targetInfo := mshrMissReqTI.asUInt
-  io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st1.deq.bits.Req.instrId
+  io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
 
   //st1 ready
   st1_ready := false.B
   when(!io.Req_st1_RTAB.valid) {
     when(Control_st1.isRead || Control_st1.isWrite) {
       when(io.tA_Hit_st1.hit) {
-        when(CoreRsp_pipeReg_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition
+        when(CoreRsp_pipeReg_st1_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition
           st1_ready := !io.memRsp_coreRsp.valid //true.B
         }
       }.otherwise { //Miss
@@ -196,7 +248,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
           }
         }.otherwise { //isWrite
           //TODO before 7.30: add hit in-flight miss
-          when(CoreRsp_pipeReg_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
+          when(CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
             st1_ready := true.B
           }
         }
@@ -208,50 +260,50 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     }
   }
   //RTAB req will deq st1 but not enq st2
-  CoreReq_pipeReg_st1.deq.ready := st1_ready || io.Req_st1_RTAB.valid
-  val CoreReq_st1_deq_fire = CoreRsp_pipeReg_st2.deq.valid && st1_ready
-  io.st1_valid := CoreReq_pipeReg_st1.deq.valid
-  io.st1_ready := CoreReq_pipeReg_st1.deq.ready
+  CoreReq_pipeReg_st0_st1.deq.ready := st1_ready || io.Req_st1_RTAB.valid
+  val CoreReq_st1_deq_fire = CoreRsp_pipeReg_st1_st2.deq.valid && st1_ready
+  io.st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
+  io.st1_ready := CoreReq_pipeReg_st0_st1.deq.ready
 
   //==========
   // st2 pipe reg
   when(CoreReq_st1_deq_fire && CacheHit_st1){
-    CoreRsp_pipeReg_st2.enq.valid            := true.B
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st1.deq.bits.Ctrl.isWrite
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.data    := DontCare
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
-    CoreRsp_pipeReg_st2.enq.bits.validFromCoreReq := true.B
-    CoreRsp_pipeReg_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st1.deq.bits.Req.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := DontCare
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
+    CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
   }.elsewhen(io.memRsp_coreRsp.valid){
-    CoreRsp_pipeReg_st2.enq.valid            := true.B
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.isWrite := false.B
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.data    := io.memRsp_coreRsp.bits.Rsp.data
-    CoreRsp_pipeReg_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
-    CoreRsp_pipeReg_st2.enq.bits.validFromCoreReq := false.B
-    CoreRsp_pipeReg_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := io.memRsp_coreRsp.bits.Rsp.data
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
+    CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
   }//TODO add flush inv
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid
-  CoreRsp_pipeReg_st2.deq.ready := coreReq_st2_ready
+  CoreRsp_pipeReg_st1_st2.deq.ready := coreReq_st2_ready
   //== st2 ==
   //hold dataaccess data when there is conflict
   val coreRsp_st2_coreRsp_data_hold = Module(new Queue(Vec(dcache_BlockWords, UInt(WordLength.W)),1,true,false))
-  coreRsp_st2_coreRsp_data_hold.io.enq.valid := CoreRsp_pipeReg_st2.deq.valid && !coreReq_st2_ready && CoreRsp_pipeReg_st2.deq.bits.validFromCoreReq
+  coreRsp_st2_coreRsp_data_hold.io.enq.valid := CoreRsp_pipeReg_st1_st2.deq.valid && !coreReq_st2_ready && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq
   coreRsp_st2_coreRsp_data_hold.io.enq.bits := io.dA_data
   coreRsp_st2_coreRsp_data_hold.io.deq.ready := coreReq_st2_ready
   val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data_hold.io.deq.valid,coreRsp_st2_coreRsp_data_hold.io.deq.bits,io.dA_data)
-  val coreRspFromCoreReq_st2 = CoreRsp_pipeReg_st2.deq.valid && CoreRsp_pipeReg_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
-  val coreRspFromMemRsp_st2 = CoreRsp_pipeReg_st2.deq.valid && !CoreRsp_pipeReg_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
+  val coreRspFromCoreReq_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
+  val coreRspFromMemRsp_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && !CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
   val st2_valid =  coreRspFromCoreReq_st2 || coreRspFromMemRsp_st2 || io.memRsp_coreRsp.valid
-  DataMemOrder_st2 := Mux(CoreRsp_pipeReg_st2.deq.bits.validFromCoreReq, DataAccessReadHit, CoreRsp_pipeReg_st2.deq.bits.Rsp.data)
+  DataMemOrder_st2 := Mux(CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq, DataAccessReadHit, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.data)
   //data covertion
   for (i <- 0 until NLanes) {
-    DataCoreOrder_st2(i) := DataMemOrder_st2(CoreRsp_pipeReg_st2.deq.bits.perLaneAddr(i).blockOffset)
+    DataCoreOrder_st2(i) := DataMemOrder_st2(CoreRsp_pipeReg_st1_st2.deq.bits.perLaneAddr(i).blockOffset)
   }
   //== st3 enq
   CoreRsp_st3.io.enq.bits.data    := DataCoreOrder_st2
-  CoreRsp_st3.io.enq.bits.instrId := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.instrId, CoreRsp_pipeReg_st2.deq.bits.Rsp.instrId)
-  CoreRsp_st3.io.enq.bits.isWrite := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.isWrite, CoreRsp_pipeReg_st2.deq.bits.Rsp.isWrite)
-  CoreRsp_st3.io.enq.bits.activeMask := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.activeMask, CoreRsp_pipeReg_st2.deq.bits.Rsp.activeMask)
+  CoreRsp_st3.io.enq.bits.instrId := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.instrId, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.instrId)
+  CoreRsp_st3.io.enq.bits.isWrite := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.isWrite, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.isWrite)
+  CoreRsp_st3.io.enq.bits.activeMask := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.activeMask, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask)
   //
   io.CoreRsp <> CoreRsp_st3.io.deq
 
