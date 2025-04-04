@@ -34,6 +34,9 @@ class TLBundleD_lite_plus(params: InclusiveCacheParameters_lite)extends TLBundle
 {
   val address=UInt(params.addressBits.W)
 }
+class TLBundleD_lite_plus_custom(params: InclusiveCacheParameters_lite)extends TLBundleD_lite_plus(params){
+  override val source=UInt(params.source_bits_custom.W)
+}
 class TLBundleD_lite_withid(params: InclusiveCacheParameters_lite)extends DirectoryResult_lite(params)
 {
   val from_mem = Bool()

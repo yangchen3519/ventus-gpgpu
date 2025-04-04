@@ -2,14 +2,16 @@ package top
 
 import L2cache.{CacheParameters, InclusiveCacheMicroParameters, InclusiveCacheParameters_lite}
 import chisel3.util._
-
+import mmu.SV32.{asidLen, paLen, vaLen}
 // TODO: MOVE parameters to `ventus/top'
 object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, not the last idx.
   def num_sm = 2
   val SINGLE_INST: Boolean = false
-  val SPIKE_OUTPUT: Boolean = true
-  val INST_CNT: Boolean = false
-  val INST_CNT_2: Boolean = true
+  val SPIKE_OUTPUT: Boolean = false
+  val INST_CNT: Boolean = true
+  val INST_CNT_2: Boolean = false
+  val MMU_ENABLED: Boolean = false
+  def MMU_ASID_WIDTH = mmu.SV32.asidLen
   val wid_to_check = 2
   def num_bank = 4
   def num_collectorUnit = num_warp
@@ -46,6 +48,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def addrLen = 32
 
+  def memReqLen = if(MMU_ENABLED) paLen else vaLen
+
   def num_block = 8// not bigger than num_warp
 
   def num_warp_in_a_block = num_warp
@@ -64,11 +68,11 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def lsu_nMshrEntry = num_warp // less than num_warp
 
-  def dcache_NSets: Int = 256
+  def dcache_NSets: Int = 32
 
   def dcache_NWays: Int = 2
 
-  def dcache_BlockWords: Int = 32  // number of words per cacheline(block)
+  def dcache_BlockWords: Int = 4  // number of words per cacheline(block)
   def dcache_wshr_entry: Int = 4
 
   def dcache_SetIdxBits: Int = log2Ceil(dcache_NSets)
@@ -86,6 +90,9 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def dcache_MshrSubEntry: Int = 2
   def dcache_MshrSet: Int = 2
   def dcache_MshrWay: Int = 4
+
+  val atuns_NInfWriteEntry: Int = 16
+  val atuns_NResTabEntry: Int = 16
 
   def num_sfu = (num_thread >> 2).max(1)
 
@@ -110,10 +117,10 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def l1cache_sourceBits: Int = 3+log2Up(dcache_MshrEntry)+log2Up(dcache_NSets)
 
   def l2cache_cache = CacheParameters(2, l2cache_NWays, l2cache_NSets, num_l2cache, l2cache_BlockWords << 2, l2cache_BlockWords << 2)
-  def l2cache_micro = InclusiveCacheMicroParameters(l2cache_writeBytes, l2cache_memCycles, l2cache_portFactor, num_warp, num_sm, num_sm_in_cluster, num_cluster,dcache_MshrEntry,dcache_NSets)
-  def l2cache_micro_l = InclusiveCacheMicroParameters(l2cache_writeBytes, l2cache_memCycles, l2cache_portFactor, num_warp, num_sm, num_sm_in_cluster, 1,dcache_MshrEntry,dcache_NSets)
-  def l2cache_params = InclusiveCacheParameters_lite(l2cache_cache, l2cache_micro, false)
-  def l2cache_params_l = InclusiveCacheParameters_lite(l2cache_cache, l2cache_micro_l, false)
+  def l2cache_micro = InclusiveCacheMicroParameters(l2cache_writeBytes, l2cache_memCycles, l2cache_portFactor, num_warp, num_sm, num_sm_in_cluster, num_cluster,dcache_MshrEntry,dcache_NSets,atuns_NInfWriteEntry)
+  def l2cache_micro_l = InclusiveCacheMicroParameters(l2cache_writeBytes, l2cache_memCycles, l2cache_portFactor, num_warp, num_sm, num_sm_in_cluster, 1,dcache_MshrEntry,dcache_NSets,atuns_NInfWriteEntry)
+  def l2cache_params = InclusiveCacheParameters_lite(l2cache_cache, l2cache_micro, false, MMU_ENABLED)
+  def l2cache_params_l = InclusiveCacheParameters_lite(l2cache_cache, l2cache_micro_l, false, MMU_ENABLED)
 
   def tc_dim: Seq[Int] = {
     var x: Seq[Int] = Seq(2, 2, 2)
@@ -129,6 +136,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def num_cache_in_sm = 2
 
   def num_l2cache = 1
+
+  def l1tlb_ways = 8
 
   def NUMBER_CU = num_sm
   def NUMBER_VGPR_SLOTS = num_vgpr
@@ -154,6 +163,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def WG_SIZE_Y_WIDTH = log2Ceil(NUM_WG_Y + 1)
   def WG_SIZE_Z_WIDTH = log2Ceil(NUM_WG_Z + 1)
 
+  def KNL_ASID_WIDTH = MMU_ASID_WIDTH
+
   object CTA_SCHE_CONFIG {
     import chisel3._
     object GPU {
@@ -162,7 +173,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_WG_SLOT = num_block                  // Number of WG slot in each CU
       val NUM_WF_SLOT = num_warp                   // Number of WF slot in each CU
       val NUM_THREAD = num_thread                  // Number of thread in each WF
-      val ASID_WIDTH = 32.W
+      val MMU_ENABLE = MMU_ENABLED                 // if MMU will be used
+      val ASID_WIDTH = MMU_ASID_WIDTH.W            // MMU ASID width
     }
     object WG {
       val WG_ID_WIDTH = parameters.WG_ID_WIDTH.W

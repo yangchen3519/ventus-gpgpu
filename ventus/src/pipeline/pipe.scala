@@ -19,6 +19,7 @@ class ICachePipeReq_np extends Bundle {
   val addr = UInt(32.W)
   val mask = UInt(num_fetch.W)
   val warpid = UInt(depth_warp.W)
+  val asid = if(MMU_ENABLED) Some(UInt(KNL_ASID_WIDTH.W)) else None
 }
 class ICachePipeRsp_np extends Bundle{
   val addr = UInt(32.W)
@@ -43,7 +44,7 @@ class pipe(val sm_id: Int = 0) extends Module{
     val wg_id_lookup=Output(UInt(depth_warp.W))
     val wg_id_tag=Input(UInt(TAG_WIDTH.W))
     val inst = if (SINGLE_INST) Some(Flipped(DecoupledIO(UInt(32.W)))) else None
-    val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else None
+    val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
   })
   val issue_stall=Wire(Bool())
@@ -165,6 +166,11 @@ class pipe(val sm_id: Int = 0) extends Module{
   ibuffer.io.in.bits.control := control.io.control
   ibuffer.io.in.bits.control_mask := control.io.control_mask
   ibuffer.io.in.valid:=io.icache_rsp.valid& !io.icache_rsp.bits.status(0)
+  if(MMU_ENABLED) {
+    for (i <- 0 until num_fetch) {
+      ibuffer.io.in.bits.control(i).asid.get := warp_sche.io.asid.get
+    }
+  }
   ibuffer.io.flush_wid:=warp_sche.io.flush
 
   (control.io.control zip control.io.control_mask).foreach{ case (ctrl, mask) =>

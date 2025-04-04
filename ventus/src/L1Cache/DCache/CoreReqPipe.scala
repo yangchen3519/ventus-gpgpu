@@ -16,6 +16,7 @@ import chisel3._
 import chisel3.util._
 import config.config.Parameters
 import top.parameters._
+import mmu.SV32.{asidLen, paLen, vaLen}
 
 class CoreReqPipe_st1(implicit p: Parameters) extends DCacheBundle{
   val Req  = new DCacheCoreReq
@@ -35,8 +36,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val MSHREmpty = Input(Bool())
     val SMSHREmpty = Input(Bool())
 
-    val Probe_MSHR = Output(new MSHRprobe(bABits))
-    val Probe_SMSHR = Output(new MSHRprobe(bABits))//TODO add special MSHR
+    val Probe_MSHR = Output(new MSHRprobe(bABits, asidLen))
+    val Probe_SMSHR = Output(new MSHRprobe(bABits, asidLen))//TODO add special MSHR
     val Probe_tA = Output(new SRAMBundleA(NSets))  // todo have ready issue
     val Probe_tA_ready = Input(Bool())
     val Req_st0_RTAB = Valid(new RTABReq())
@@ -56,7 +57,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val CacheHit_st1 = Output(Bool())
     val Req_st1_RTAB = ValidIO(new RTABReq())
     val CheckReq_WSHR = Output(new WSHRreq)
-    val MissReq_MSHR = DecoupledIO(new MSHRmissReq(bABits, tIBits, WIdBits))
+    val MissReq_MSHR = DecoupledIO(new MSHRmissReq(bABits, tIBits, WIdBits, asidLen))
     val st1_valid = Output(Bool())
     val st1_ready = Output(Bool())
     val MissReq_Mem = DecoupledIO(new WshrMemReq) // for memReq Pipe

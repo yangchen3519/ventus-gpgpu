@@ -109,7 +109,7 @@ trait RocketChip
       with Cross.Module[String] {
     def scalaVersion: T[String] = T(v.scalaVersions(crossValue))
     override def millSourcePath = os.pwd / "dependencies" / "rocket-chip" / "dependencies" / "hardfloat" / "hardfloat"
-    
+
     def chiselModule = None
     def chiselPluginJar = None
     def chiselIvy = Some(v.chiselCrossVersions(chiselVersion)._1)
@@ -131,7 +131,7 @@ trait RocketChip
       with Cross.Module[String] {
     override def scalaVersion: T[String] = T(v.scalaVersions(crossValue))
     override def millSourcePath = os.pwd / "dependencies" / "rocket-chip" / "dependencies" / "diplomacy" / "diplomacy"
-    
+
     def chiselModule = None
     def chiselPluginJar = None
     def chiselIvy = Option.when(crossValue != "source")(v.chiselCrossVersions(crossValue)._1)
@@ -149,22 +149,32 @@ trait InclusiveCache
   def chiselVersion: String = crossValue
   def scalaVersion = v.scalaVersions(chiselVersion)
   override def millSourcePath = os.pwd / "dependencies" / "rocket-chip-inclusive-cache" / "design" / "craft" / "inclusivecache"
-  
+
   def chiselIvy = Some(v.chiselCrossVersions(chiselVersion)._1)
   def chiselPluginIvy = Some(v.chiselCrossVersions(chiselVersion)._2)
 
   override def scalacOptions = T {
     super.scalacOptions() ++ Agg("-Xsource:2.13")
   }
-  
+
   def rocketchipModule = rocketchip(crossValue)
   override def moduleDeps = super.moduleDeps ++ Seq(rocketchipModule)
+}
+
+object MemboxS extends Cross[MemboxS](v.chiselCrossVersions.keys.toSeq)
+trait MemboxS extends millbuild.common.HasChisel
+  with SbtModule with Cross.Module[String] {
+  def chiselVersion: String = crossValue
+  def scalaVersion = v.scalaVersions(chiselVersion)
+  def chiselIvy = Some(v.chiselCrossVersions(chiselVersion)._1)
+  def chiselPluginIvy = Some(v.chiselCrossVersions(chiselVersion)._2)
+  override def millSourcePath = os.pwd / "dependencies" / "Membox2.Scala"
 }
 
 // Define main ventus module
 object ventus extends Cross[Ventus](v.chiselCrossVersions.keys.toSeq)
 trait Ventus
-  extends millbuild.common.VentusModule 
+  extends millbuild.common.VentusModule
     with Cross.Module[String] {
   def chiselVersion: String = crossValue
   def scalaVersion = v.scalaVersions(chiselVersion)
@@ -177,6 +187,7 @@ trait Ventus
   def fpuv2Module = fpuv2(crossValue)
   def rocketchipModule = rocketchip(crossValue)
   def inclusivecacheModule = inclusivecache(crossValue)
+  def memboxModule = MemboxS(crossValue)
 
   override def forkArgs = Seq("-Xmx32G", "-Xss192m")
   override def scalacOptions = super.scalacOptions() ++ Seq(
@@ -196,8 +207,6 @@ trait Ventus
       v.chiselCrossVersions(chiselVersion)._3
     )
   }
-
-  def mainClass = Some("top.GPGPU_gen")   // def this to specify top App when generating verilog
 }
 
 // trait VentusGPGPUPublishModule extends PublishModule {

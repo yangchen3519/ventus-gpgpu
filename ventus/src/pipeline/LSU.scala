@@ -14,6 +14,8 @@ import top.parameters._
 import chisel3._
 import chisel3.util._
 import IDecode._
+import mmu.SV32.asidLen
+import top.cache_spike_info
 
 class toShared extends Bundle{
   val instrId = UInt(log2Up(lsu_nMshrEntry).W)
@@ -37,10 +39,12 @@ class DCacheCoreReq_np extends Bundle{
 //  val isWrite = Bool()
   val tag = UInt(dcache_TagBits.W)
   val setIdx = UInt(dcache_SetIdxBits.W)
+  val asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
   val perLaneAddr = Vec(num_thread, new DCachePerLaneAddr)
   val data = Vec(num_thread, UInt(xLen.W))
   val opcode = UInt(3.W)
   val param= UInt(4.W)
+  val spike_info=if(SPIKE_OUTPUT) Some(new cache_spike_info(mmu.SV32)) else None
 }
 
 class DCacheCoreRsp_np extends Bundle{
@@ -171,22 +175,22 @@ class AddrCalculate(val sharedmemory_addr_max: UInt = 4096.U(32.W)) extends Modu
       same_tag(x) := Mux(reg_save.mask(x), addr(x)(xLen-1, xLen-1-dcache_TagBits-dcache_SetIdxBits+1)===Cat(tag, setIdx), false.B)
     )
   val blockOffset = Wire(Vec(num_thread, UInt(dcache_BlockOffsetBits.W)))
-    (0 until num_thread).foreach( x => blockOffset(x) := addr(x)(10, 2) )
+  (0 until num_thread).foreach( x => blockOffset(x) := addr(x)(10, 2) )
   val wordOffset1H = Wire(Vec(num_thread, UInt(BytesOfWord.W)))
-    (0 until num_thread).foreach( x => {
+  (0 until num_thread).foreach( x => {
   //DONE: Add Control Signals in vExeData.ctrl and define lw lh lb
-      wordOffset1H(x) := 15.U(4.W)
-      switch(reg_save.ctrl.mem_whb){
-        is(MEM_W) { wordOffset1H(x) := 15.U }
-        is(MEM_H) { wordOffset1H(x) :=
-          Mux(addr(x)(1)===0.U,
-            3.U,
-            12.U
-          )
-        }
-        is(MEM_B) { wordOffset1H(x) := 1.U << addr(x)(1,0) }
+    wordOffset1H(x) := 15.U(4.W)
+    switch(reg_save.ctrl.mem_whb){
+      is(MEM_W) { wordOffset1H(x) := 15.U }
+      is(MEM_H) { wordOffset1H(x) :=
+        Mux(addr(x)(1)===0.U,
+          3.U,
+          12.U
+        )
       }
-    })
+      is(MEM_B) { wordOffset1H(x) := 1.U << addr(x)(1,0) }
+    }
+  })
   //val reg_toMSHR = Reg(new MshrTag)
   //val vld_toMSHR = Reg(Bool())
   io.to_mshr.bits.tag.mask := reg_save.mask
@@ -221,9 +225,17 @@ class AddrCalculate(val sharedmemory_addr_max: UInt = 4096.U(32.W)) extends Modu
 
   //val vld_toDCache = Reg(Bool())
   io.to_dcache.bits.instrId := reg_entryID
+  if(MMU_ENABLED) {
+    io.to_dcache.bits.asid.get := reg_save.ctrl.asid.get
+  }
+
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   io.to_dcache.bits.tag := tag
   io.to_dcache.bits.setIdx := setIdx
+  io.to_dcache.bits.spike_info.foreach{ left =>
+    left.pc := reg_save.ctrl.pc
+    left.vaddr := addr_wire
+  }
   val opcode_wire =Wire(UInt(3.W))
   val param_wire_alt =Wire(UInt(4.W))
   param_wire_alt := Mux(reg_save.ctrl.alu_fn===FN_SWAP,16.U,Mux(reg_save.ctrl.alu_fn===FN_AMOADD,0.U,Mux(reg_save.ctrl.alu_fn===FN_XOR,1.U,

@@ -19,7 +19,7 @@ import config.config.Parameters
 import top.parameters._
 
 class L1Cache2L2ArbiterIO(implicit p: Parameters) extends DCacheBundle{
-  val memReqVecIn = Flipped(Vec(NCacheInSM, Decoupled(new DCacheMemReq)))
+  val memReqVecIn = if(MMU_ENABLED) Some(Flipped(Vec(NCacheInSM, Decoupled(new DCacheMemReq_p)))) else Some(Flipped(Vec(NCacheInSM, Decoupled(new DCacheMemReq))))
   val memReqOut = Decoupled(new L1CacheMemReqArb)
   val memRspIn = Flipped(Decoupled(new L1CacheMemRsp))
   val memRspVecOut = Vec(NCacheInSM, Decoupled(new DCacheMemRsp()))
@@ -30,9 +30,9 @@ class L1Cache2L2Arbiter(implicit p: Parameters) extends DCacheModule {
 
   // **** memReq ****
   val memReqArb = Module(new Arbiter(new L1CacheMemReq,NCacheInSM))
-  memReqArb.io.in <> io.memReqVecIn
+  memReqArb.io.in <> io.memReqVecIn.get
   for(i <- 0 until NCacheInSM) {
-    memReqArb.io.in(i).bits.a_source := Cat(i.asUInt,io.memReqVecIn(i).bits.a_source)
+    memReqArb.io.in(i).bits.a_source := Cat(i.asUInt,io.memReqVecIn.get(i).bits.a_source)
   }
   io.memReqOut <> memReqArb.io.out
   // ****************

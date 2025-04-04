@@ -21,7 +21,7 @@ class DCacheWraper extends Module{
   io.coreRsp <> DCache.io.coreRsp
   val L2 = Module(new L2ROM()(param))
   L2.io.memRsp <> DCache.io.memRsp
-  L2.io.memReq <> DCache.io.memReq
+  L2.io.memReq <> DCache.io.memReq.get
   L2.io.memReq_ready := io.memReq_ready
 
   io.dummy := Cat(L2.io.memReq_data).orR ^ Cat(L2.io.memReq_mask).orR
@@ -50,7 +50,7 @@ class L2ROM(implicit p: Parameters) extends DCacheModule {
   loadMemoryFromFile(memory,"./L2Image.txt")
   val raw_vec = Wire(Vec(BlockWords,UInt(WordLength.W)))
   for (i<- 0 until BlockWords){//do not include blockWords
-    raw_vec(i) := memory.read(Cat(get_blockAddr(io.memReq.bits.a_addr),i.U(BlockOffsetBits.W)))
+    raw_vec(i) := memory.read(Cat(get_blockAddr(io.memReq.bits.a_addr.get),i.U(BlockOffsetBits.W)))
   }
   io.memReq.ready := io.memReq_ready
 
@@ -59,7 +59,7 @@ class L2ROM(implicit p: Parameters) extends DCacheModule {
   for (i<- 0 until BlockWords){
     data_write_in_vec(i) := Mux(io.memReq.bits.a_mask(i).orR,io.memReq.bits.a_data(i),raw_vec(i))
     when(io.memReq.fire && (a_opcode === TLAOp_PutPart || a_opcode === TLAOp_PutFull)) {
-      memory.write(Cat(get_blockAddr(io.memReq.bits.a_addr),i.U(BlockOffsetBits.W)), data_write_in_vec(i))
+      memory.write(Cat(get_blockAddr(io.memReq.bits.a_addr.get),i.U(BlockOffsetBits.W)), data_write_in_vec(i))
     }
   }
 
@@ -69,7 +69,7 @@ class L2ROM(implicit p: Parameters) extends DCacheModule {
   val opcode_out1 = RegEnable(d_opcode_1,io.memReq.fire)
   val instrIdx_out1 = RegEnable(io.memReq.bits.a_source,io.memReq.fire)
   val data_out1 = RegEnable(data_out,io.memReq.fire)
-  val addr_out1 = RegEnable(Cat(get_blockAddr(io.memReq.bits.a_addr),
+  val addr_out1 = RegEnable(Cat(get_blockAddr(io.memReq.bits.a_addr.get),
     Fill(32-(TagBits+SetIdxBits),0.U(1.W))),io.memReq.fire)
   val fire_out1 = RegNext(io.memReq.fire)
 
