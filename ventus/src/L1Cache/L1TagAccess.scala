@@ -225,6 +225,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     //val choosenDirtySetIdx_st0 = Wire(UInt(log2Up(set).W))
     val choosenDirtySetValid = Wire(Vec(way, Bool()))
     val choosenDirtyWayMask_st0 = Wire(UInt(way.W))//OH
+    val choosenDirtyWayMask_st1 = Wire(UInt(way.W))//OH
     val choosenDirtyTag_st1 = Wire(UInt(tagBits.W))
     val choosenDirtyASID_st1 = Wire(UInt(AsidBits.W))
     //set一般值为128。
@@ -238,8 +239,9 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     choosenDirtySetIdx_st0 := PriorityEncoder(setDirty)
     choosenDirtySetValid := way_dirtyAfterValid(choosenDirtySetIdx_st0)
     choosenDirtyWayMask_st0 := VecInit(PriorityEncoderOH(choosenDirtySetValid)).asUInt
-    choosenDirtyTag_st1 := tagBodyAccess.io.r.resp.data(OHToUInt(choosenDirtyWayMask_st0))
-    choosenDirtyASID_st1 := ASIDAccess.io.r.resp.data(OHToUInt(choosenDirtyWayMask_st0))
+    choosenDirtyWayMask_st1 := RegNext(choosenDirtyWayMask_st0)
+    choosenDirtyTag_st1 := tagBodyAccess.io.r.resp.data(OHToUInt(choosenDirtyWayMask_st1))
+    choosenDirtyASID_st1 := ASIDAccess.io.r.resp.data(OHToUInt(choosenDirtyWayMask_st1))
     //val choosenDirtySetIdx_st1 = RegNext(choosenDirtySetIdx_st0)
     //val choosenDirtyWayMask_st1 = RegNext(choosenDirtyWayMask_st0)
     io.dirtyTag_st1.get := choosenDirtyTag_st1

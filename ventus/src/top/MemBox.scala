@@ -167,7 +167,7 @@ class MemBox[T <: BaseSV](SV: T) extends Memory(SV.MaxPhyRange, SV) {
     for (i <- metaData.buffer_base.indices) {
       val lower = metaData.buffer_base(i)
       // Temporary fix
-      val real_size = if(lower == BigInt("080000000", 16)) 8 * SV.PageSize else metaData.buffer_size(i).toInt
+      val real_size = if(lower == BigInt("080000000", 16)) 8 * SV.PageSize else metaData.buffer_size(i).toInt // 软件工具链给0x80000000的buffer size太大了，所以暂时固定一个小的值
       val upper = lower + real_size - (lower + real_size) % SV.PageSize
 
       if(real_size > 0){

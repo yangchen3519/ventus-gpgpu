@@ -38,14 +38,14 @@ class L2TlbEntryA(SV: SVParam) extends L2TlbEntry(SV){
 }
 
 class L2TlbWriteBundle(SV: SVParam) extends Bundle with L2TlbParam {
-  val windex = UInt(log2Up(nSets).W)
+  val windex = UInt(log2Up(nSets/nBanks).W)
   val waymask = UInt(nWays.W)
   val wdata = new L2TlbEntryA(SV)
 }
 
 class L2TlbStorage(SV: SVParam) extends Module with L2TlbParam {
   val io = IO(new Bundle{
-    val rindex = Input(UInt(log2Up(nSets).W))
+    val rindex = Input(UInt(log2Up(nSets/nBanks).W))
     val tlbOut = Output(Vec(nWays, new L2TlbEntryA(SV)))
     val write = Flipped(ValidIO(new L2TlbWriteBundle(SV)))
     val wAvail = Output(UInt(nWays.W))
@@ -67,7 +67,7 @@ class L2TlbStorage(SV: SVParam) extends Module with L2TlbParam {
   val s_idle :: s_reset :: Nil = Enum(2)
   val nState = WireInit(s_idle)
   val cState = RegNext(nState)
-  val (resetState, resetFin) = Counter(cState === s_reset, nSets)
+  val (resetState, resetFin) = Counter(cState === s_reset, nSets/nBanks)
   val resetAsid = RegInit(0.U(SV.asidLen.W))
 
   val wen = Mux(cState === s_reset, true.B, io.write.valid && io.ready)
@@ -224,7 +224,7 @@ class L2TLB(
   extends Module with L2TlbParam {
   assert(log2Ceil(nBanks) == log2Floor(nBanks))
   override def nSectors: Int = L2C match {
-    case Some(l2c) => l2c.beatBytes / (SV.xLen / 8)
+    case Some(l2c) => l2c.beatBytes / (SV.xLen / 8) // beatBytes = 32 << 2 =128
     case None => super.nSectors
   }
   val io = IO(new Bundle{
@@ -257,13 +257,13 @@ class L2TLB(
 
   val walker = Module(new PTW(SV, nBanks, false, L2C))
 
-  val replace = Seq.fill(nBanks)(new SetAssocLRU(nSets, nWays, "lru"))
+  val replace = Seq.fill(nBanks)(new SetAssocLRU(nSets/nBanks, nWays, "lru"))
   val refillIndex = RegInit(VecInit(Seq.fill(nBanks)(0.U(log2Up(nSets).W))))
   val refillWay = VecInit((storageArray zip replace).map{ case(s, r) => Mux(s.io.wAvail.orR, PriorityEncoder(s.io.wAvail), r.way(s.io.write.bits.windex))})
 
   val refillData = Seq.fill(nBanks)(RegInit(0.U.asTypeOf(new L2TlbEntryA(SV))))
 
-  val s_idle :: s_check :: s_ptw_req :: s_ptw_rsp :: s_reply :: Nil = Enum(5)
+  val s_idle :: s_check :: s_ptw_req :: s_ptw_rsp :: s_reply :: s_invalid :: Nil = Enum(6)
   val nextState = WireInit(VecInit(Seq.fill(nBanks)(s_idle)))
   val curState = nextState.map(RegNext(_))
 
@@ -318,7 +318,7 @@ class L2TLB(
       accelRefillArb(j).io.in(i).valid := walker.io.accel_fill(i).valid && refill_level === j.U
       accelRefillArb(j).io.in(i).bits.asid := tlb_req.asid
       accelRefillArb(j).io.in(i).bits.vpn := accelStorageArray(j).vpnSplit(tlb_req.vpn)._1
-      accelRefillArb(j).io.in(i).bits.level := i.U // likely unused at all
+      accelRefillArb(j).io.in(i).bits.level := i.U //! likely unused at all, since var j has stands for the level
       accelRefillArb(j).io.in(i).bits.ppns := Mux(accelRefillArb(j).io.in(i).valid, walker.io.accel_fill(i).bits.ppns, 0.U.asTypeOf(accelRefillArb(j).io.in(i).bits.ppns))
       accelRefillArb(j).io.in(i).bits.flags := Mux(accelRefillArb(j).io.in(i).valid, walker.io.accel_fill(i).bits.flags, 0.U.asTypeOf(accelRefillArb(j).io.in(i).bits.flags))
 
@@ -353,7 +353,9 @@ class L2TLB(
 
     switch(cState){
       is(s_idle){
-        when(in.fire){
+        when(io.invalidate.valid){
+          nState := s_invalid
+        }.elsewhen(in.fire){
           tlb_req := in.bits
           when(storage.io.ready && !io.invalidate.valid) {
             nState := s_check
@@ -405,6 +407,13 @@ class L2TLB(
       is(s_reply){
         refillData(i) := 0.U.asTypeOf(refillData(i))
         when(out.fire){ nState := s_idle }.otherwise{ nState := s_reply }
+      }
+      is(s_invalid){
+        when(storage.io.ready){
+          nState := s_idle
+        }.otherwise{
+          nState := s_invalid
+        }
       }
     }
 
