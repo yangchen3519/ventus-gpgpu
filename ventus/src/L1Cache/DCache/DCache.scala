@@ -385,7 +385,7 @@ class DataCache(implicit p: Parameters) extends DCacheModule{
   DataAccessReadHitSRAMRReq.foreach(_.setIdx := Cat(coreReq_st1.setIdx,OHToUInt(TagAccess.io.waymaskHit_st1)))
 
   val waitforL2flush_st2 = RegInit(false.B)
-  val flushstall = coreReqControl_st0_noen.isFlush || coreReqControl_st0_noen.isInvalidate || waitforL2flush
+  val flushstall = coreReqControl_st0.isFlush || coreReqControl_st0.isInvalidate || waitforL2flush
   //todo cannot handle when there still exist inflight L2 rsp
 
   when(io.coreReq.fire && (coreReqControl_st0_noen.isInvalidate || coreReqControl_st0_noen.isFlush)){
