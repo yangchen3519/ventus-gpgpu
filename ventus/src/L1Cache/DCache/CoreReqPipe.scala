@@ -118,18 +118,19 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   //Flush L2 FSM
   val idle :: flushing :: responding :: Nil = Enum(3)
   val FlushInvstateReg = RegInit(idle)
+  val FlushInvstateReg_next = WireInit(FlushInvstateReg)
   // todo: add FSM defination
   when(FlushInvstateReg === idle){
     when(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && CoreReqControl_st0.isFluInvL2){
-      FlushInvstateReg := flushing
+      FlushInvstateReg_next := flushing
   }.elsewhen(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)){
-    FlushInvstateReg := responding
+    FlushInvstateReg_next := responding
   }
   }.elsewhen(FlushInvstateReg === flushing){
 //TODO add memRsp connection
   }.elsewhen(FlushInvstateReg === responding){
     when(st0_ready){
-      FlushInvstateReg := idle
+      FlushInvstateReg_next := idle
     }
   }
   // valid ready
@@ -146,23 +147,27 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       st0_valid  := io.CoreReq.valid && io.MSHREmpty && io.SMSHREmpty
       st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.MSHREmpty && io.SMSHREmpty
     }.elsewhen(CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate){
-      when(io.hasDirty){
-        //write back dirty cacheline
-        st0_valid  := io.CoreReq.valid
-        st0_ready := false.B
-      }.otherwise{
-        when(FlushInvstateReg === idle){
-          st0_valid  := io.CoreReq.valid && io.Probe_tA_ready
-          st0_ready := false.B
-        }.elsewhen(FlushInvstateReg === flushing){
+      
+        when(FlushInvstateReg_next === idle){
+           when(!io.MSHREmpty || !io.SMSHREmpty){
+             st0_valid := false.B
+             st0_ready := false.B
+           }.elsewhen(io.hasDirty){
+             //write back dirty cacheline
+             st0_valid  := io.CoreReq.valid
+             st0_ready := false.B
+           }
+        }.elsewhen(FlushInvstateReg_next === flushing){
           st0_valid := false.B
           st0_ready := false.B
-        }.elsewhen(FlushInvstateReg === responding){
+        }.elsewhen(FlushInvstateReg_next === responding){
           st0_valid := io.CoreReq.valid
           st0_ready := CoreReq_pipeReg_st0_st1.enq.ready
         }
-      }
     }
+  }.otherwise{
+    st0_valid := false.B
+    st0_ready := true.B
   }
 
   //st0_ready := io.Probe_tA_ready && CoreReq_pipeReg_st0_st1.enq.ready
@@ -202,6 +207,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.MissReq_Mem.valid := CacheMiss_st1
   // RTABReqType req
   io.Req_st1_RTAB.valid := false.B
+  ReplayType := 0.U
   when(Control_st1.isUncached && CacheHitDirty_st1){
     io.Req_st1_RTAB.valid := st1_valid
     ReplayType := UCacheHitDirty
@@ -245,11 +251,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
         when(Control_st1.isRead) {
           when(io.MissReq_MSHR.ready && (MshrStatus === PrimaryAvail || MshrStatus === SecondaryAvail) //即memReq_Q.io.enq.ready
             && io.Mshr_st1_ready) {
-            st1_ready := io.MissReq_Mem.ready //true.B
+              when(MshrStatus === SecondaryAvail){
+                st1_ready := true.B //true.B
+              }.otherwise{
+                st1_ready := io.MissReq_Mem.ready
+              }
           }
         }.otherwise { //isWrite
-          //TODO before 7.30: add hit in-flight miss
-          when(CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
+          when(ReplayType === writeMissHitMSHR){
+            st1_ready := true.B
+          }.elsewhen(CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
             st1_ready := true.B
           }
         }
