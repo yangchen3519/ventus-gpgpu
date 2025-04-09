@@ -224,11 +224,11 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
       io.asid_fill.foreach{ in =>
         asid_lookup.io.fill_in := in
       }
-    // 连接 L2 TLB 的 invalidate 信号
+    // 连接 L2 TLB 的 invalidate 信号，目前此部分仍需要后续驱动的支持
     l2tlb.io.invalidate.valid := io.host_req.valid
     // val asid_invalid = (asid_lookup.io.fill_in.bits.asid.asUInt - 1.U).asTypeOf(l2tlb.io.invalidate.bits)
     val asid_invalid = asid_lookup.io.fill_in.bits.asid.asTypeOf(l2tlb.io.invalidate.bits)
-    l2tlb.io.invalidate.bits := asid_invalid  // ASID 值，由于我们要清空所有条目，
+    l2tlb.io.invalidate.bits := asid_invalid  // ASID 值，要清空指定地址空间的条目
 
       // sm <-> l2tlb
       val sm_tlb_xbar = Module(new L1ToL2TlbXBar(sv, NSms * NCacheInSM)(Some(this)))
