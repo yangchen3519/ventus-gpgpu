@@ -59,7 +59,7 @@ class DCacheCoreRsp_d(implicit p: Parameters) extends DCacheBundle{
 
 class DCacheMemRsp(implicit p: Parameters) extends DCacheBundle{
   val d_opcode = UInt(3.W)// AccessAckData only
-  //val d_param
+  val d_param = UInt(3.W)
   //val d_size
   val d_source = UInt((3+log2Up(NMshrEntry)+log2Up(NSets)).W)//cut off head log2Up(NSms) bits at outside
   val d_addr = UInt(WordLength.W)

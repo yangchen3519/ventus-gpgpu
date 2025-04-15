@@ -26,22 +26,23 @@ class WSHRIdxUpdate (implicit p: Parameters) extends DCacheBundle{
 class L1RTAB(implicit p: Parameters) extends DCacheModule {
   val io = IO(new Bundle {
     //to coreReq_pipe0
-    val coreReq_replay = DecoupledIO(new DCacheCoreReq) // insert core Req to pipe line st0
+    val coreReq_replay      = DecoupledIO(new DCacheCoreReq) // insert core Req to pipe line st0
     //to coreReq-io
-    val RTAB_full = Output(Bool())
-    val RTAB_almost_full = Output(Bool()) // can't take st0 request if there is st1 request
+    val RTAB_full           = Output(Bool())
+    val RTAB_almost_full    = Output(Bool()) // can't take st0 request if there is st1 request
     //From coreReq_pipe1
     // write miss hit in MSHR:
     // include 1 - probestatus = 3, secondary full, read/write miss, hit in mshr, need to wait for missrspin
     //         2- probestatus = 2/3 write miss, hit in mshr
-    val RTABReq_st1 = Flipped(ValidIO(new RTABReq)) // pipeline st1 req
-    val RTABUpdate =  Flipped(ValidIO(new RTABUpdate))
-    val RTABReq_st0 = Flipped(ValidIO(new RTABReq)) // pipeline st0 req, for RTAB hit check
+    val RTABReq_st1         = Flipped(ValidIO(new RTABReq)) // pipeline st1 req
+    val RTABUpdate          =  Flipped(ValidIO(new RTABUpdate))
+    val RTABReq_st0         = Flipped(ValidIO(new RTABReq)) // pipeline st0 req, for RTAB hit check
     // read miss hit in WSHR (NoC may cause MC problem)
     // to coreReqst1
-    val checkRTABhit = Output(Bool())
-    val mshrFull = Input(Bool())
-    val RTABpushedIdx = Output(UInt(log2Up(NRTABs).W))
+    val checkRTABhit        = Output(Bool())
+    val mshrFull            = Input(Bool())
+    val LRexist             = Input(Bool())
+    val RTABpushedIdx       = Output(UInt(log2Up(NRTABs).W))
     val pushedWSHRIdxUpdate = Flipped(ValidIO(new WSHRIdxUpdate))
   })
   val Req_access = Reg(Vec(NRTABs, new DCacheCoreReq))
@@ -193,6 +194,8 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   when(Replay_type(popPtr) === 0.U && EntryValid(popPtr)){
     injectCoreReq_valid := true.B
   }.elsewhen(Replay_type(popPtr) === EntryFull && EntryValid(popPtr) && !io.mshrFull){
+    injectCoreReq_valid := true.B
+  }.elsewhen(Replay_type(popPtr) === SCLRexist && EntryValid(popPtr) && !io.LRexist){
     injectCoreReq_valid := true.B
   }.otherwise{
     injectCoreReq_valid := false.B

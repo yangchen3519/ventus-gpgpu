@@ -56,6 +56,7 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   def writeMissHitMSHR: UInt = 6.U(4.W)
   def writeMissHitWSHR: UInt = 7.U(4.W)
   def hitRTAB: UInt = 8.U(4.W)
+  def SCLRexist: UInt = 9.U(4.W)
   //TL params
   def TLAOp_Get       : UInt = 4.U(3.W)
   def TLAOp_PutFull   : UInt = 0.U(3.W)
@@ -77,6 +78,9 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   def TLAParam_LogicSwap  : UInt = 3.U(3.W)
   def TLAParam_LRSC       : UInt = 1.U(3.W)
 
+  def TLDOp_AccessAck : UInt = 0.U(3.W)
+  def TLDOp_AccessAckData :UInt = 1.U(3.W)
+  def TLDOp_HintAck :UInt = 2.U(3.W)
   //LSU Param
   def LSUSwapParam   : UInt =16.U(4.W)
   def LSUAddParam    : UInt = 0.U(4.W)
