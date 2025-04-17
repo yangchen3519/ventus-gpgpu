@@ -45,6 +45,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
       singlePort = false
     ))
   }
+  val DataAccessRRsp = DataAccesses.map(d => d.io.r.resp.data)
+  val DataAccessReadSRAMRRsp = VecInit[Vec[UInt]](DataAccessRRsp)
   // pipelines
   val coreReqPipe = Module(new CoreReqPipe)
   val memRspPipe = Module(new MemRspPipe)
@@ -57,20 +59,60 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   CoreReqArb.io.in(1) <> io.coreReq
   io.coreReq.ready := CoreReqArb.io.in(0).ready && !ReplayTable.io.RTAB_full
   // coreReqPipe connection
-  CoreReqArb.io.out            <> coreReqPipe.io.CoreReq
+  coreReqPipe.io.CoreReq       <> CoreReqArb.io.out   
   coreReqPipe.io.RTABHit       := ReplayTable.io.checkRTABhit
   coreReqPipe.io.hasDirty      := TagAccess.io.hasDirty_st0.get
   coreReqPipe.io.MSHREmpty     := MshrAccess.io.empty
   coreReqPipe.io.SMSHREmpty    := SMshrAccess.io.empty
-  coreReqPipe.io.Probe_MSHR    := coreReqPipe.io.Probe_MSHR
-  TagAccess.io.probeRead       := coreReqPipe.io.Probe_tA     
+
+  MshrAccess.io.probe          := coreReqPipe.io.Probe_MSHR
+  if(MMU_ENABLED){
+    MshrAccess.io.probeAsid.get      := coreReqPipe.io.probeAsid.get
+  }
+  TagAccess.io.probeRead       := coreReqPipe.io.Probe_tA   
   coreReqPipe.io.Req_st0_RTAB  <> ReplayTable.io.RTABReq_st0
-  coreReqPipe.io.tA_Hit_st1    := TagAccess.io.hitStatus_st1
+
+  coreReqPipe.io.tA_Hit_st1       := TagAccess.io.hitStatus_st1
   coreReqPipe.io.MSHR_ProbeStatus := MshrAccess.io.probeOut_st1
-  coreReqPipe.io.SMSHR_hit        := SMshrAccess.io.hit
-  coreReqPipe.io.SMSHR_hitblock   := SMshrAccess.io.hitBlock
-  coreReqPipe.io.SMSHR_LRexist    := SMshrAccess.io.LRexist
-  ///coreReqPipe.io.WSHR_CheckResult := WshrAccess.io.checkResult
+  coreReqPipe.io.SMSHR_ProbeStatus := SMshrAccess.io.probeOut_st1
+  coreReqPipe.io.WSHR_CheckResult := WshrAccess.io.checkresult
   coreReqPipe.io.Mshr_st1_ready   := MshrAccess.io.missReq.ready
+
+  TagAccess.io.tagFromCore_st1    := coreReqPipe.io.tagFromCore_tA_st1
+  if(MMU_ENABLED){
+    TagAccess.io.asidFromCore_st1.get := coreReqPipe.io.asidFromCore_tA_st1.get
+  }
+  ReplayTable.io.RTABReq_st1      <> coreReqPipe.io.Req_st1_RTAB
+  WshrAccess.io.checkReq := coreReqPipe.io.CheckReq_WSHR
+  SMshrAccess.io.missReq          <> coreReqPipe.io.Probe_SMSHR
+  MshrAccess.io.missReq           <> coreReqPipe.io.MissReq_MSHR
+  coreReqPipe.io.memRsp_coreRsp   <> memRspPipe.io.memRsp_coreRsp
+
+  coreReqPipe.io.dA_data          <> DataAccessReadSRAMRRsp
+
+  io.coreRsp <> coreReqPipe.io.CoreRsp
+
+  // memRspPipe connection
+  memRsp_Q.io.enq <> io.memRsp
+  memRsp_Q.io.deq <> memRspPipe.io.memRsp
+  TagAccess.io.allocateWrite      <> memRspPipe.io.tAAllocateWriteReq
+  ReplayTable.io.RTABUpdate       <> memRspPipe.io.RTABUpdateReq
+  MshrAccess.io.missRspIn         <> memRspPipe.io.MSHRMissRsp
+  SMshrAccess.io.missRspIn        <> memRspPipe.io.SMSHRMissRsp
+  WshrAccess.io.popReq            <> memRspPipe.io.WSHRPopReq
+
+  memRspPipe.io.MSHRMissRspOut    <> MshrAccess.io.missRspOut
+  memRspPipe.io.SMSHRMissRspOut   <> SMshrAccess.io.missRspOut
+  if(MMU_ENABLED){
+    memRspPipe.io.MSHRMissRspOutAsid.get := MshrAccess.io.missRspOutAsid.get
+    memRspPipe.io.SMSHRMissRspOutAsid.get := SMshrAccess.io.missRspOutAsid.get
+  }
+  memRspPipe.io.tAWayMask   := TagAccess.io.waymaskReplacement_st1
+  memRspPipe.io.needReplace := TagAccess.io.needReplace.get
+
+
   
+
+  MemReqArb.io.in(1) <> coreReqPipe.io.MissReq_Mem
+
 }

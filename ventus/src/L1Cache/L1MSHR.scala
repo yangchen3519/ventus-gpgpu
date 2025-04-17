@@ -40,6 +40,11 @@ class SMSHRmissReq (val bABits: Int, val tIWdith: Int, val WIdBits: Int, val Asi
   val wordOffset = UInt(dcache_BlockOffsetBits.W)
   val Type = UInt(2.W) // 0-lr 1- sc 2-amo
 }
+class SMSHRprobeOut(val NEntry: Int) extends Bundle{
+  val hitblockIdx = UInt(log2Up(NEntry).W)
+  val hitblock = Bool()
+  val LRexist = Bool()
+}
 class MSHRmissRspIn(val NEntry: Int) extends Bundle {//Use this bundle when a block return from Lower cache
   val instrId = UInt(log2Up(NEntry).W)
 }
@@ -377,11 +382,7 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
     val missRspOut = Decoupled(new MSHRmissRspOut(bABits, tIWidth, WIdBits,AsidBits))
     val missRspOutAsid = if(MMU_ENABLED) {Some(Output(UInt(AsidBits.W)))} else None
     val empty = Output(Bool())
-    val hit   = Output(Bool()) //word hit
-    val hitIdx = Output(UInt(log2Up(NMshrEntry).W))
-    val LRexist = Output(Bool())
-    val hitBlock = Output(Bool()) // cacheline hit
-    val hitBlockIdx = Output(UInt(log2Up(NMshrEntry).W))
+    val probeOut_st1 = Output(new SMSHRprobeOut(NMshrEntry))
     val full = Output(Bool())
     val stage2_ready = Input(Bool())
     val stage1_ready = Input(Bool())
@@ -430,11 +431,9 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   for (i <- 0 until NMshrEntry) {
     conditionVec(i) := entry_valid(i) && (type_Access(i) === 0.U)
   }
-  io.hit := entryMatchProbe.orR
-  io.hitIdx := OHToUInt(entryMatchProbe)
-  io.hitBlock := entryMatchProbeBlock.orR
-  io.hitBlockIdx := OHToUInt(entryMatchProbeBlock)
-  io.LRexist := conditionVec.reduce(_||_)
+  io.probeOut_st1.hitblock := entryMatchProbeBlock.orR
+  io.probeOut_st1.hitblockIdx := OHToUInt(entryMatchProbeBlock)
+  io.probeOut_st1.LRexist := conditionVec.reduce(_||_)
   io.empty := !entry_valid.reduce(_||_)
   io.full := entry_valid.reduce(_&&_)
   io.missRspOut <> missRspOut_st1.io.deq

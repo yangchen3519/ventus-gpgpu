@@ -25,8 +25,7 @@ class DCacheWSHR(Depth:Int) extends Module{
     val popReq = Flipped(ValidIO(UInt(log2Up(Depth).W)))
     //check
     val checkReq = Input(new WSHRreq)
-    val wshrHit = Output(Bool())
-    val hitIdx = Output(UInt(log2Up(Depth).W))
+    val checkresult = Output(new WSHRCheckResult(Depth))
 
   })
  // assert(!(io.pushReq.valid && io.popReq.valid),"WSHR cant pop and push in same cycle")
@@ -48,8 +47,8 @@ class DCacheWSHR(Depth:Int) extends Module{
     case(bA,valid) => (bA === io.checkReq.blockAddr) && valid}))
   val checkmatchIdx = OHToUInt(checkMatchMask)
   val checkMatchPop = (checkmatchIdx === io.popReq.bits) && io.popReq.valid
-  io.wshrHit := (checkMatchMask.orR && !checkMatchPop) || checkMatchPush
-  io.hitIdx := Mux(checkMatchPush, io.pushedIdx, checkmatchIdx)
+  io.checkresult.Hit := (checkMatchMask.orR && !checkMatchPop) || checkMatchPush
+  io.checkresult.HitIdx := Mux(checkMatchPush, io.pushedIdx, checkmatchIdx)
 
   //pushReq.ready := !full
   io.pushReq.ready := !valid.reduceTree(_ & _)

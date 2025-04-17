@@ -49,13 +49,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     
     val tA_Hit_st1       = Input(new hitStatus(NWays, TagBits))
     val MSHR_ProbeStatus = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
-    val SMSHR_hit        = Input(Bool())
-    val SMSHR_hitblock   = Input(Bool())
-    val SMSHR_LRexist    = Input(Bool())
+    val SMSHR_ProbeStatus = Input(new SMSHRprobeOut(NMshrEntry))
     val WSHR_CheckResult = Input(new WSHRCheckResult(NWshrEntry))
     val Mshr_st1_ready   = Input(Bool())
+    val memRsp_coreRsp      = Flipped(DecoupledIO(new CoreRspPipe_st2))
 
     val tagFromCore_tA_st1  = Output(UInt(dcache_TagBits.W))
+    val asidFromCore_tA_st1 = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
     val coreReq_Control_st1 = Output(new DCacheControl)
     val read_Req_dA         = Output(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
     val CacheHit_st1        = Output(Bool())
@@ -66,7 +66,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val st1_valid           = Output(Bool())
     val st1_ready           = Output(Bool())
     val MissReq_Mem         = DecoupledIO(new WshrMemReq)
-    val memRsp_coreRsp      = Flipped(DecoupledIO(new CoreRspPipe_st2))
+
 
     //st2
     val dA_data        = Input(Vec(BlockWords, UInt(WordLength.W)))
@@ -192,6 +192,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   //=== st1 ===
 
   io.tagFromCore_tA_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.tag // check the tag from core with tag from tA block
+  if(MMU_ENABLED){
+    io.asidFromCore_tA_st1.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
+  }
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   io.read_Req_dA.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
@@ -240,10 +243,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }.elsewhen(WriteMiss_st1 && io.WSHR_CheckResult.Hit){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := writeMissHitWSHR
-  }.elsewhen(io.SMSHR_hitblock){
+  }.elsewhen(io.SMSHR_ProbeStatus.hitblock){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := HitSMSHR
-  }.elsewhen(Control_st1.isSC && io.SMSHR_LRexist){
+  }.elsewhen(Control_st1.isSC && io.SMSHR_ProbeStatus.LRexist){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := SCLRexist
   }
