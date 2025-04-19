@@ -259,7 +259,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
     !(coreReq_Q.io.deq.bits.opcode === 3.U && readHit_st1 && coreReq_st1_valid) //InvOrFlu希望在st0读Data SRAM，检查资源冲突
   // ******      tag probe      ******
   //val missRspWriteEnable = Wire(Bool())
-  TagAccess.io.probeRead.valid := io.coreReq.fire || injectTagProbe
+  TagAccess.io.probeRead.valid := (io.coreReq.fire || injectTagProbe) && !(coreReqControl_st0.isFlush || coreReqControl_st0.isInvalidate)
   TagAccess.io.probeRead.bits.setIdx := Mux(injectTagProbe,coreReq_st1.setIdx,io.coreReq.bits.setIdx)
   TagAccess.io.tagFromCore_st1 := coreReq_st1.tag
   if(MMU_ENABLED) {
@@ -487,8 +487,8 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   InvOrFluMemReq.a_opcode := Mux(invalidatenodirty,L2flush.a_opcode, TLAOp_PutFull)//PutFullData:Get
   InvOrFluMemReq.a_param := Mux(invalidatenodirty,L2flush.a_param,0.U) //regular write
   InvOrFluMemReq.a_source := DontCare //wait for WSHR
-  InvOrFluMemReq.a_addr.get := RegNext(Cat(TagAccess.io.dirtyTag_st1.get,
-    TagAccess.io.dirtySetIdx_st0.get, 0.U((WordLength - TagBits - SetIdxBits).W)))
+  InvOrFluMemReq.a_addr.get := Cat(TagAccess.io.dirtyTag_st1.get,
+    RegNext(TagAccess.io.dirtySetIdx_st0.get), 0.U((WordLength - TagBits - SetIdxBits).W))
   if(MMU_ENABLED){
     InvOrFluMemReq.Asid.get := TagAccess.io.dirtyASID_st1.get
   }
