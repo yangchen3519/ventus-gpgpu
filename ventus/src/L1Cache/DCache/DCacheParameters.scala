@@ -82,7 +82,7 @@ trait HasDCacheParameter extends HasL1CacheParameters {
   def TLDOp_AccessAckData :UInt = 1.U(3.W)
   def TLDOp_HintAck :UInt = 2.U(3.W)
   //LSU Param
-  def LSUSwapParam   : UInt =16.U(4.W)
+  def LSUSwapParam   : UInt =15.U(4.W)
   def LSUAddParam    : UInt = 0.U(4.W)
   def LSUXorParam    : UInt = 1.U(4.W)
   def LSUAndParam    : UInt = 3.U(4.W)

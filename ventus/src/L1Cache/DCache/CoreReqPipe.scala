@@ -35,6 +35,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val hasDirty       = Input(Bool())
     val MSHREmpty      = Input(Bool())
     val SMSHREmpty     = Input(Bool())
+    val tA_dirtySetIdx_st0 = Input(UInt(dcache_SetIdxBits.W))
+    val tA_dirtyWayMask_st0= Input(UInt(dcache_NWays.W))
 
     val Probe_MSHR     = Output(new MSHRprobe(bABits, asidLen))
     val probeAsid      = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
@@ -48,6 +50,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     //st1
     
     val tA_Hit_st1       = Input(new hitStatus(NWays, TagBits))
+    val tA_dirtyTag_st1  = Input(UInt(TagBits.W))
+    val tA_dirtyAsid_st1 = if(MMU_ENABLED) {Some(Input(UInt(asidLen.W)))} else None
     val MSHR_ProbeStatus = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
     val SMSHR_ProbeStatus = Input(new SMSHRprobeOut(NMshrEntry))
     val WSHR_CheckResult = Input(new WSHRCheckResult(NWshrEntry))
@@ -57,22 +61,29 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val tagFromCore_tA_st1  = Output(UInt(dcache_TagBits.W))
     val asidFromCore_tA_st1 = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
     val coreReq_Control_st1 = Output(new DCacheControl)
-    val read_Req_dA         = Output(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
+    val read_Req_dA         = ValidIO(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
     val CacheHit_st1        = Output(Bool())
     val Req_st1_RTAB        = ValidIO(new RTABReq())
     val CheckReq_WSHR       = Output(new WSHRreq)
-    val Probe_SMSHR         = Output(new SMSHRmissReq(bABits, tIBits, WIdBits, asidLen))//TODO add special MSHR
+    val Probe_SMSHR         = DecoupledIO(new SMSHRmissReq(bABits, tIBits, WIdBits, asidLen))//TODO add special MSHR
     val MissReq_MSHR        = DecoupledIO(new MSHRmissReq(bABits, tIBits, WIdBits, asidLen))
+    val MissCached_MSHR     = Output(Bool())
     val st1_valid           = Output(Bool())
     val st1_ready           = Output(Bool())
+    // missReq_Mem for read write miss and flu inv dirty write back
     val MissReq_Mem         = DecoupledIO(new WshrMemReq)
-
+    val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
+    val WriteHit_st1        = Output(Bool())
 
     //st2
     val dA_data        = Input(Vec(BlockWords, UInt(WordLength.W)))
-    val memReq_coreRsp = Flipped(DecoupledIO(new DCacheCoreRsp_d))
+    val memReq_coreRsp = Flipped(DecoupledIO(new DCacheCoreRsp))
 
     val CoreRsp = DecoupledIO(new DCacheCoreRsp)
+
+    val memRspIsFlu = Input(Bool())
+    val st3_ready = Output(Bool())
+    val invalidate_tA = Output(Bool())
   })
 
   //====== st0 =======
@@ -91,6 +102,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val st1_ready = Wire(Bool())
   // missReq st1
   val missMemReq_st1   = Wire(new WshrMemReq)
+  val evictMemReq_st1  = Wire(new WshrMemReq)
+  val FluInvMemReq_st1 = Wire(new WshrMemReq)
+  val missMemReq_valid    = Wire(Bool())
+  val evictMemReq_valid   = Wire(Bool())
+  val FluInvMemReq_valid  = Wire(Bool())
 
   //====== st2 ======
   val CoreRsp_pipeReg_st1_st2 = Module(new Queue(new CoreRspPipe_st2,entries = 1, pipe = true,flow = false)).io
@@ -131,7 +147,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val idle :: flushing :: responding :: Nil = Enum(3)
   val FlushInvstateReg = RegInit(idle)
   val FlushInvstateReg_next = WireInit(FlushInvstateReg)
-  // todo: add FSM defination
+  FlushInvstateReg_next := FlushInvstateReg
+  FlushInvstateReg := FlushInvstateReg_next
   when(FlushInvstateReg === idle){
     when(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && CoreReqControl_st0.isFluInvL2){
       FlushInvstateReg_next := flushing
@@ -139,12 +156,17 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     FlushInvstateReg_next := responding
   }
   }.elsewhen(FlushInvstateReg === flushing){
-//TODO add memRsp connection
+    when(io.memRspIsFlu){
+      FlushInvstateReg_next := responding
+    }
   }.elsewhen(FlushInvstateReg === responding){
     when(st0_ready){
       FlushInvstateReg_next := idle
     }
   }
+  val FluInvIsPut_st1 = io.CoreReq.valid && (FlushInvstateReg === idle)
+  val FluInvIsFluL2_st1 = io.CoreReq.valid && (FlushInvstateReg === flushing)
+  val FluInv_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush || CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
   // valid ready
   // st0 st1 pipe reg enq valid
   st0_valid := false.B
@@ -170,7 +192,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
              st0_ready := false.B
            }
         }.elsewhen(FlushInvstateReg_next === flushing){
-          st0_valid := false.B
+          st0_valid := io.CoreReq.valid && (FlushInvstateReg === idle)
           st0_ready := false.B
         }.elsewhen(FlushInvstateReg_next === responding){
           st0_valid := io.CoreReq.valid
@@ -181,6 +203,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     st0_valid := false.B
     st0_ready := true.B
   }
+  io.invalidate_tA := (FlushInvstateReg === responding) && CoreReqControl_st0.isInvalidate
+  io.st0_valid := st0_valid
+  io.st0_ready := st0_ready
 
   //st0_ready := io.Probe_tA_ready && CoreReq_pipeReg_st0_st1.enq.ready
   // =============
@@ -197,13 +222,28 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
-  io.read_Req_dA.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
+  io.read_Req_dA.bits.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
+  when((CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)&& io.hasDirty){
+    io.read_Req_dA.bits.foreach(_.setIdx := Cat(io.tA_dirtySetIdx_st0,OHToUInt(io.tA_dirtyWayMask_st0)))
+  }
   io.Req_st1_RTAB.bits.CoreReqData := CoreReq_pipeReg_st0_st1.deq.bits.Req
   io.Req_st1_RTAB.bits.ReqType     := ReplayType
   io.Req_st1_RTAB.bits.mshrIdx     := MshrIdx
   io.Req_st1_RTAB.bits.wshrIdx     := WshrIdx
   io.CheckReq_WSHR.blockAddr := BlockAddr_st1
-  io.MissReq_Mem.bits := missMemReq_st1
+  // FSM for evict
+  val evictidle :: evictrsp:: Nil = Enum(2)
+  val evictstateReg = RegInit(evictidle)
+  val evictReg_next = WireInit(evictstateReg)
+// mem request io connection
+  when(FluInvMemReq_valid){
+    io.MissReq_Mem.bits := FluInvMemReq_st1
+  }.elsewhen(evictMemReq_valid){
+    io.MissReq_Mem.bits := evictMemReq_st1
+  }.otherwise{
+    io.MissReq_Mem.bits := missMemReq_st1
+  }
+  io.MissReq_Mem.valid := missMemReq_valid || FluInvMemReq_valid || evictMemReq_valid
 
 
   MshrIdx := io.MSHR_ProbeStatus.a_source
@@ -218,15 +258,18 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val CacheHit_st1 = io.tA_Hit_st1.hit
   val CacheMiss_st1 = !io.tA_Hit_st1.hit
   val CacheHitDirty_st1 = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty
+  val UCReqHitNDirty = io.tA_Hit_st1.hit && !io.tA_Hit_st1.isDirty && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isUncached
+  val UCReqHitDirty  = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isUncached
   io.CacheHit_st1 := CacheHit_st1
-  io.MissReq_Mem.valid := CacheMiss_st1
+  io.WriteHit_st1 := WriteHit_st1
+  missMemReq_valid := CacheMiss_st1 || UCReqHitNDirty
   // RTABReqType req
   val Req_RTAB_st1_valid = Wire(Bool())
   Req_RTAB_st1_valid := false.B
   io.Req_st1_RTAB.valid := Req_RTAB_st1_valid && st1_ready // request RTAB when st1_ready
   ReplayType := 0.U
   when(Control_st1.isUncached && CacheHitDirty_st1 && Control_st1.isWrite){
-    Req_RTAB_st1_valid :=CoreReq_pipeReg_st0_st1.deq.valid
+    Req_RTAB_st1_valid :=CoreReq_pipeReg_st0_st1.deq.valid && (evictstateReg === evictrsp)
     ReplayType := UCacheHitDirty
   }.elsewhen(MshrStatus === SecondaryFull){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
@@ -250,6 +293,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := SCLRexist
   }
+  io.read_Req_dA.valid := ReadHit_st1 || UCReqHitDirty || ((CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)&& io.hasDirty)
 
   //missReq 2 mem, request type and data generator
   OpcodeGen.io.coreReqCtrl := Control_st1
@@ -257,12 +301,60 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   OpcodeGen.io.hit_dirty := io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty
   addrGen.io.dataIn := CoreReq_pipeReg_st0_st1.deq.bits.Req.data
   addrGen.io.perLaneAddrIn := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
+  // cache miss mem Req
   missMemReq_st1.a_opcode := OpcodeGen.io.memReq_a_opcode
   missMemReq_st1.a_addr.get := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
   missMemReq_st1.a_param  := OpcodeGen.io.memReq_a_param
   missMemReq_st1.a_data := addrGen.io.dataOut
+  missMemReq_st1.hasCoreRsp := Control_st1.isWrite
+  missMemReq_st1.coreRspInstrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
+  when(Control_st1.isRead){
+    missMemReq_st1.a_source := Cat("d1".U, io.MSHR_ProbeStatus.a_source, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
+  }.elsewhen(Control_st1.isLR || Control_st1.isSC || Control_st1.isAMO){
+    missMemReq_st1.a_source := Cat("d2".U, io.SMSHR_ProbeStatus.a_source, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
+  }.otherwise{
+    missMemReq_st1.a_source := DontCare
+  }
+  if(MMU_ENABLED){
+    missMemReq_st1.Asid.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
+    FluInvMemReq_st1.Asid.get := io.tA_dirtyAsid_st1.get
+    evictMemReq_st1.Asid.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
+  }
   //regular read miss req mask is all 1
   missMemReq_st1.a_mask := Mux(missMemReq_st1.a_opcode === TLAOp_Get &&missMemReq_st1.a_param === 0.U,VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U))),addrGen.io.MaskOut)
+  // flu or inv mem req
+  FluInvMemReq_st1.a_opcode := Mux(FluInvIsPut_st1,TLAOp_PutFull,TLAOp_Flush)
+  FluInvMemReq_st1.a_param := Mux(FluInvIsPut_st1, 0.U, Mux(CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush, TLAParam_Flush, TLAParam_Inv))
+  FluInvMemReq_st1.a_addr.get := Cat(io.tA_dirtyTag_st1, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
+  FluInvMemReq_st1.a_data := io.dA_data
+  FluInvMemReq_st1.a_source := DontCare
+  FluInvMemReq_st1.hasCoreRsp := false.B
+  FluInvMemReq_st1.coreRspInstrId := DontCare
+  FluInvMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  FluInvMemReq_valid := FluInv_st1 && CoreReq_pipeReg_st0_st1.deq.valid
+  // uncache hit dirty cacheline evict request
+  evictMemReq_st1.a_opcode := TLAOp_PutFull
+  evictMemReq_st1.a_param  := 0.U
+  evictMemReq_st1.a_addr.get := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
+  evictMemReq_st1.a_data := io.dA_data
+  evictMemReq_st1.hasCoreRsp := false.B
+  evictMemReq_st1.a_source := DontCare
+  evictMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  evictstateReg := evictReg_next
+  evictMemReq_st1.coreRspInstrId := DontCare
+  evictReg_next := evictstateReg
+  // FSM for read da
+  when(evictstateReg === evictidle){
+    when(CoreReq_pipeReg_st0_st1.deq.valid && UCReqHitDirty){
+      evictReg_next := evictrsp
+    }.otherwise{
+      evictReg_next := evictstateReg
+    }
+  }.elsewhen(evictstateReg === evictrsp && io.MissReq_Mem.ready){
+    evictReg_next := evictidle
+  }
+  evictMemReq_valid := evictstateReg === evictrsp
+
   //MSHR miss Req
   val mshrMissReqTI = Wire(new VecMshrTargetInfo)
   mshrMissReqTI.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
@@ -271,14 +363,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.MissReq_MSHR.bits.blockAddr := BlockAddr_st1
   io.MissReq_MSHR.bits.targetInfo := mshrMissReqTI.asUInt
   io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
-
-  io.Probe_SMSHR.blockAddr := BlockAddr_st1
-  io.Probe_SMSHR.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
-  io.Probe_SMSHR.targetInfo := mshrMissReqTI.asUInt
-  io.Probe_SMSHR.wordOffset := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(lane => 
+  io.MissCached_MSHR := Control_st1.isUncached
+  io.Probe_SMSHR.bits.blockAddr := BlockAddr_st1
+  io.Probe_SMSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
+  io.Probe_SMSHR.bits.targetInfo := mshrMissReqTI.asUInt
+  io.Probe_SMSHR.bits.wordOffset := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(lane => 
   Mux(lane.activeMask, lane.blockOffset, 0.U)
 ).reduce(_ | _)
-  io.Probe_SMSHR.Type := 0.U
+  io.Probe_SMSHR.bits.Type := 0.U
+  // todo add probe type
+  io.Probe_SMSHR.valid := st1_valid 
 
   //st1 ready
   st1_ready := false.B
@@ -286,8 +380,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     when(Control_st1.isRead || Control_st1.isWrite) {
       when(io.tA_Hit_st1.hit) {
           when(CoreRsp_pipeReg_st1_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition
-            when(Control_st1.isUncached && io.tA_Hit_st1.isDirty){ // uncached read hit dirty will write back to mem and rsp to core
-              st1_ready := !io.memRsp_coreRsp.valid && io.MissReq_Mem.ready
+            when(UCReqHitDirty){ // uncached read hit dirty will write back to mem and rsp to core
+              st1_ready := !io.memRsp_coreRsp.valid && io.MissReq_Mem.ready && (evictstateReg === evictrsp)
             }.otherwise{
               st1_ready := !io.memRsp_coreRsp.valid //true.B
             }
@@ -307,21 +401,37 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
             st1_ready := true.B
           }
         }
-      } //.otherwise{//coreReq is not valid
-      //  coreReq_st1_ready := true.B
-      //}//TODO invalidate and flush handling
+      }
     }.elsewhen(Control_st1.isAMO){
       st1_ready := io.MissReq_Mem.ready
     }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
-      st1_ready := CoreRsp_pipeReg_st1_st2.enq.ready
+      when(FlushInvstateReg === idle || FlushInvstateReg === flushing){
+        st1_ready := io.MissReq_Mem.ready
+      }.otherwise{
+        st1_ready := CoreRsp_pipeReg_st1_st2.enq.ready
+      }
     }.otherwise{st1_ready := true.B}
   }.otherwise{// when requesting RTAB
     when(ReplayType === UCacheHitDirty){ // when hit in UCache and dirty, will write back to memory
-      st1_ready := io.MissReq_Mem.ready
+      st1_ready := io.MissReq_Mem.ready && (evictstateReg === evictrsp)
     }.otherwise{
       st1_ready := true.B
     }
   }
+  //write hit
+  val getBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
+  getBankEn.io.perLaneBlockIdx :=  CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.blockOffset)
+  getBankEn.io.perLaneValid :=  CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
+
+  // ******      dataAccess write hit      ******
+  val DataAccessWriteHitSRAMWReq: Vec[SRAMBundleAW[UInt]] = Wire(Vec(BlockWords,new SRAMBundleAW(UInt(8.W), NSets*NWays, BytesOfWord)))
+  //this setIdx = setIdx + wayIdx
+  DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat( CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask)))
+  for (i <- 0 until BlockWords){
+    DataAccessWriteHitSRAMWReq(i).waymask.get := addrGen.io.MaskOut(getBankEn.io.perBankBlockIdx(i))
+    DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(getBankEn.io.perBankBlockIdx(i)).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
+  }
+  io.WriteReq_dA := DataAccessWriteHitSRAMWReq
     //st1 valid: enqueue st1 st2 pipe reg for coreRsp
     // indicating coreRsp is valid from core Req
     // case: regular read/write hit, uncached read hit, uncache write hit undirty, write miss, flush invalidate complete
@@ -336,7 +446,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     }
   }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
-    st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
+    st1_valid := CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === responding)
   }.otherwise{
     st1_valid := false.B
   }
@@ -344,7 +454,6 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //RTAB req will deq st1 but not enq st2: except for uncache read hit dirty
   CoreReq_pipeReg_st0_st1.deq.ready := st1_ready
-  val CoreReq_st1_deq_fire = CoreRsp_pipeReg_st1_st2.deq.valid && st1_ready
   io.st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
   io.st1_ready := CoreReq_pipeReg_st0_st1.deq.ready
 
@@ -364,8 +473,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
+  }.otherwise{
+    CoreRsp_pipeReg_st1_st2.enq.valid := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits := DontCare
   }
-  //TODO add flush inv
+  io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.deq.ready
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid
   CoreRsp_pipeReg_st1_st2.deq.ready := coreReq_st2_ready
   //== st2 ==
@@ -377,19 +489,21 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data_hold.io.deq.valid,coreRsp_st2_coreRsp_data_hold.io.deq.bits,io.dA_data)
   val coreRspFromCoreReq_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
   val coreRspFromMemRsp_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && !CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
-  val st2_valid =  coreRspFromCoreReq_st2 || coreRspFromMemRsp_st2 || io.memRsp_coreRsp.valid
+  val st2_valid =  coreRspFromCoreReq_st2 || coreRspFromMemRsp_st2 || io.memReq_coreRsp.valid
   DataMemOrder_st2 := Mux(CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq, DataAccessReadHit, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.data)
   //data covertion
   for (i <- 0 until NLanes) {
     DataCoreOrder_st2(i) := DataMemOrder_st2(CoreRsp_pipeReg_st1_st2.deq.bits.perLaneAddr(i).blockOffset)
   }
+  io.memReq_coreRsp.ready := CoreRsp_st3.io.enq.ready
   //== st3 enq
+  CoreRsp_st3.io.enq.valid := io.memReq_coreRsp.valid || CoreRsp_pipeReg_st1_st2.deq.valid
   CoreRsp_st3.io.enq.bits.data    := DataCoreOrder_st2
   CoreRsp_st3.io.enq.bits.instrId := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.instrId, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.instrId)
   CoreRsp_st3.io.enq.bits.isWrite := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.isWrite, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.isWrite)
   CoreRsp_st3.io.enq.bits.activeMask := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.activeMask, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask)
   //
   io.CoreRsp <> CoreRsp_st3.io.deq
-
+  io.st3_ready := CoreRsp_st3.io.enq.ready
 }
 

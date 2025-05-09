@@ -41,8 +41,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     val waymaskHit_st1 = Output(UInt(way.W))
     //From memRsp_pipe0
     val allocateWrite = Flipped(ValidIO(new SRAMBundleA(set)))//Allocate Channel
-    val allocateWriteData_st1 = Input(UInt(tagBits.W))
-    val allocateIsUncached_st1 = Input(Bool()) ///todo dont need, unccache req will not give valid allocatewrite.valid
+    val allocateWriteData_st1 = Input(UInt(tagBits.W))///todo dont need, unccache req will not give valid allocatewrite.valid
     val allocateWriteAsid_st1 = if(MMU_ENABLED) Some(Input(UInt(AsidBits.W))) else None
     //From memRsp_pipe1
     val allocateWriteTagSRAMWValid_st1 = Input(Bool())
@@ -207,6 +206,7 @@ if(MMU_ENABLED) {
   io.hitStatus_st1.hit := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid
   io.hitStatus_st1.waymask := Mux(cachehit_hold.io.deq.valid && cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
   io.hitStatus_st1.isDirty := way_dirty(probeReadBuf.bits.setIdx)(OHToUInt(iTagChecker.io.waymask))
+  io.hitStatus_st1.tag := tagBodyAccess.io.r.resp.data(OHToUInt(io.hitStatus_st1.waymask))
   io.waymaskHit_st1 := Mux(cachehit_hold.io.deq.valid & cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
   if(!readOnly){//tag_array::write_hit_mark_dirty
     assert(!(iTagChecker.io.cache_hit && io.probeIsWrite_st1.get && io.flushChoosen.get.valid),"way_dirty write-in conflict!")
@@ -248,7 +248,7 @@ if(MMU_ENABLED) {
   }.elsewhen(io.invalidateAll){//tag_array::invalidate_all()
     way_valid := VecInit(Seq.fill(set)(VecInit(Seq.fill(way)(false.B))))
   }.elsewhen (iTagChecker.io.cache_hit && io.probeIsUncache_st1) {
-    way_dirty(probeReadBuf.bits.setIdx)(OHToUInt(iTagChecker.io.waymask)) := false.B
+    way_valid(probeReadBuf.bits.setIdx)(OHToUInt(iTagChecker.io.waymask)) := false.B
   }
   assert(!(io.allocateWrite.valid && io.invalidateAll))
 

@@ -4,8 +4,12 @@ import chisel3._
 import chisel3.util._
 import L2cache.{TLBundleA_lite_custom, TLBundleD_lite_plus_custom, InclusiveCacheParameters_lite, TLBundleA_lite, TLBundleD_lite_plus}
 import L1Cache.AtomicUnit.AtomicUnit
+import L1Cache.DCache._
+import L1Cache._
+import L1Cache.{ MyConfig}
 import top.parameters._
 import config.config.Parameters
+import freechips.rocketchip.util.SeqToAugmentedSeq
 
 class L2CacheUtil(params: InclusiveCacheParameters_lite) extends Module {
   val io = IO(new Bundle {
@@ -80,9 +84,82 @@ class L2CacheUtil(params: InclusiveCacheParameters_lite) extends Module {
   }.otherwise {
     reqQueue.io.deq.ready := false.B
   }
-} 
-  
+}
 
+class L2CacheUtillite(params: InclusiveCacheParameters_lite)(implicit p: Parameters) extends Module {
+  val io = IO(new Bundle {
+    val memReq = Flipped(Decoupled(new DCacheMemReq))
+    val memRsp = Decoupled(new DCacheMemRsp)
+  })
+
+  // ROM storage
+  val romSize = 256  // 1KB ROM
+  val rom = Mem(romSize, UInt((dcache_BlockWords * xLen).W))
+  
+  // Initialize ROM with some test data
+  for (i <- 0 until romSize) {
+    rom.write(i.U, (i * 2).U)
+  }
+
+  // Request queue
+  val reqQueue = Module(new Queue(new Bundle {
+    val addr = UInt(params.addressBits.W)
+    val source = UInt(params.source_bits.W)
+    val opcode = UInt(3.W)
+    val param = UInt(3.W)
+    val size = UInt(3.W)
+    val data = UInt((dcache_BlockWords*xLen).W)
+    val mask = UInt((dcache_BlockWords*4).W)
+  }, 4))
+
+  // Default outputs
+  io.memReq.ready := reqQueue.io.enq.ready
+  io.memRsp.valid := false.B
+  io.memRsp.bits := DontCare
+
+  // Handle incoming requests
+  reqQueue.io.enq.valid := io.memReq.valid
+  reqQueue.io.enq.bits.addr := io.memReq.bits.a_addr.get
+  reqQueue.io.enq.bits.source := io.memReq.bits.a_source
+  reqQueue.io.enq.bits.opcode := io.memReq.bits.a_opcode
+  reqQueue.io.enq.bits.param := io.memReq.bits.a_param
+  reqQueue.io.enq.bits.size := DontCare
+  reqQueue.io.enq.bits.data := io.memReq.bits.a_data.asUInt
+  reqQueue.io.enq.bits.mask := io.memReq.bits.a_mask.asUInt
+
+  // Handle write operations immediately
+  when(io.memReq.valid && (io.memReq.bits.a_opcode === 1.U || io.memReq.bits.a_opcode === 0.U)) {
+    val writeAddr = io.memReq.bits.a_addr.get >> (2+dcache_BlockOffsetBits)
+    val writeData = io.memReq.bits.a_data
+    val writeMask = io.memReq.bits.a_mask
+    
+    // Read current data
+    val currentData = rom.read(writeAddr)
+    
+    // Apply mask and write new data
+    val newData = (currentData & ~writeMask.asUInt) | (writeData.asUInt & writeMask.asUInt)
+    rom.write(writeAddr, newData)
+  }
+
+  // Handle responses
+  when(reqQueue.io.deq.valid) {
+    io.memRsp.valid := true.B
+    io.memRsp.bits.d_opcode := Mux(reqQueue.io.deq.bits.opcode === 4.U, 1.U, 0.U)
+    io.memRsp.bits.d_param := reqQueue.io.deq.bits.param
+  //  io.memRsp.bits.d_size := reqQueue.io.deq.bits.size
+    io.memRsp.bits.d_source := reqQueue.io.deq.bits.source
+    io.memRsp.bits.d_data := rom.read(reqQueue.io.deq.bits.addr >> (2+dcache_BlockOffsetBits)).asTypeOf(io.memRsp.bits.d_data)
+    io.memRsp.bits.d_addr := reqQueue.io.deq.bits.addr
+
+    when(io.memRsp.ready) {
+      reqQueue.io.deq.ready := true.B
+    }.otherwise {
+      reqQueue.io.deq.ready := false.B
+    }
+  }.otherwise {
+    reqQueue.io.deq.ready := false.B
+  }
+}
 
 class AtomicWrapper(params: InclusiveCacheParameters_lite)(implicit p: Parameters) extends Module {
   val io = IO(new Bundle {
@@ -103,4 +180,22 @@ class AtomicWrapper(params: InclusiveCacheParameters_lite)(implicit p: Parameter
   // Connect external ports
   io.L12ATUmemReq <> atomicUnit.io.L12ATUmemReq
   io.ATU2L1memRsp <> atomicUnit.io.ATU2L1memRsp
+} 
+
+class DCacheWrapper(params: InclusiveCacheParameters_lite, SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends Module {
+  val io = IO(new Bundle {
+    val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
+    val coreRsp = DecoupledIO(new DCacheCoreRsp)
+  })
+
+  // Instantiate AtomicUnit
+   val dcache = Module(new DataCachev2(SV)(p))
+  
+  // Instantiate L2ROM
+  val l2 = Module(new L2CacheUtillite(params))
+
+  dcache.io.coreReq <> io.coreReq
+  dcache.io.coreRsp <> io.coreRsp
+  dcache.io.memReq.get <> l2.io.memReq
+  dcache.io.memRsp <> l2.io.memRsp
 } 

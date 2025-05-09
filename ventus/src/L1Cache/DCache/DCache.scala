@@ -55,6 +55,7 @@ class genControl extends Module{
   io.control.isInvalidate := false.B
   io.control.isWaitMSHR := false.B
   io.control.isFluInvL2 := false.B
+  io.control.isUncached := false.B
   switch(io.opcode){
     is(0.U){
       when(io.param === 0.U){
@@ -96,11 +97,11 @@ class genControl extends Module{
   }
 }
 //For subword request: lsu req will only use the LSBs, didn't reflect the real addr offset
-class genDataMapPerByte(numdata:Int, NLanes:Int) extends Module{
+class genDataMapPerByte(numdata:Int, Length:Int) extends Module{
   val io = IO(new Bundle{
-    val OriData = Input(Vec(numdata,UInt(NLanes.W)))
+    val OriData = Input(Vec(numdata,UInt(Length.W)))
     val offsetMask = Input(Vec(numdata,UInt(4.W)))
-    val DataOut = Output(Vec(numdata,UInt(NLanes.W)))
+    val DataOut = Output(Vec(numdata,UInt(Length.W)))
   })
   for(i <- 0 until numdata){
     when(io.offsetMask(i).andR){
@@ -154,11 +155,10 @@ class dataReqCrossBar(implicit p: Parameters) extends DCacheModule{
     val MaskOut = Output(Vec(dcache_BlockWords,UInt(BytesOfWord.W)))
   })
   val LaneBlockConv = Wire(Vec(dcache_BlockWords,Vec(NLanes,UInt(1.W))))
-  val WordOffsetConv = Wire(Vec(dcache_BlockWords,UInt(BytesOfWord.W)))
   val data_map_byte = Wire(Vec(NLanes,UInt(WordLength.W)))
   val data_map_sameword = Wire(Vec(NLanes,UInt(WordLength.W)))
   val PerLaneAddr_Remap = Wire(Vec(NLanes,new DCachePerLaneAddr))
-  val DataMapByte = Module(new genDataMapPerByte(dcache_BlockWords,NLanes)) // shift bytes into right position, according to perLaneAddr
+  val DataMapByte = Module(new genDataMapPerByte(NLanes,WordLength)) // shift bytes into right position, according to perLaneAddr
   val DataMapSameWord = Module(new genDataMapSameWord)
 
   DataMapByte.io.OriData := io.dataIn
