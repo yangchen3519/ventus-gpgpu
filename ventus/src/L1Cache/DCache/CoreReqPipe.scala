@@ -43,6 +43,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val Probe_tA       = Output(new SRAMBundleA(NSets))  // todo have ready issue
     val Probe_tA_ready = Input(Bool())
     val Req_st0_RTAB   = Valid(new RTABReq())
+    val flushDirty_tA  = Output(Bool())
 
     val st0_ready      = Output(Bool())
     val st0_valid      = Output(Bool())
@@ -82,7 +83,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val CoreRsp = DecoupledIO(new DCacheCoreRsp)
 
     val memRspIsFlu = Input(Bool())
-    val st3_ready = Output(Bool())
+    val st2_ready = Output(Bool())
     val invalidate_tA = Output(Bool())
   })
 
@@ -160,10 +161,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       FlushInvstateReg_next := responding
     }
   }.elsewhen(FlushInvstateReg === responding){
-    when(st0_ready){
+    when(CoreReq_pipeReg_st0_st1.enq.ready){
       FlushInvstateReg_next := idle
     }
   }
+  io.flushDirty_tA := (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && (FlushInvstateReg_next === idle)
   val FluInvIsPut_st1 = io.CoreReq.valid && (FlushInvstateReg === idle)
   val FluInvIsFluL2_st1 = io.CoreReq.valid && (FlushInvstateReg === flushing)
   val FluInv_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush || CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
@@ -459,10 +461,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //==========
   // st2 pipe reg
-  when(st1_valid && st1_ready){
+  when(st1_valid && st1_ready && CacheHit_st1){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := DontCare
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
@@ -470,6 +473,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := io.memRsp_coreRsp.bits.Rsp.data
+     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.instrId := io.memRsp_coreRsp.bits.Rsp.instrId
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
@@ -504,6 +508,6 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreRsp_st3.io.enq.bits.activeMask := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.activeMask, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask)
   //
   io.CoreRsp <> CoreRsp_st3.io.deq
-  io.st3_ready := CoreRsp_st3.io.enq.ready
+  io.st2_ready := CoreRsp_st3.io.enq.ready
 }
 

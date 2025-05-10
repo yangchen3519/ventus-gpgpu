@@ -88,6 +88,7 @@ class getEntryStatusRsp(nEntry: Int) extends Module{
 class MSHRpipe1Reg(WidthMatchProbe: Int, SubEntryNext: Int) extends Bundle{
   val entryMatchProbe = UInt(WidthMatchProbe.W)
   val subEntryIdx = UInt(SubEntryNext.W) 
+  val full = Bool()
 }
 
 class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:Int, val NMshrSubEntry:Int, val AsidBits:Int) extends Module {
@@ -104,6 +105,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     val missRspOutAsid = if(MMU_ENABLED) {Some(Output(UInt(AsidBits.W)))} else None
     //For InOrFlu
     val empty = Output(Bool())
+    val full  = Output(Bool())
     val probestatus = Output(Bool())
     val mshrStatus_st0 = Output(UInt(3.W))
     val stage2_ready = Input(Bool())
@@ -218,6 +220,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   MSHR_st1.io.enq.valid := io.probe.valid
   MSHR_st1.io.enq.bits.entryMatchProbe := entryMatchProbe
   MSHR_st1.io.enq.bits.subEntryIdx := subentryStatus.io.next
+  MSHR_st1.io.enq.bits.full  := mainEntryFull && subEntryFull
   MSHR_st1.io.deq.ready := io.stage1_ready
 
   when(io.missReq.fire && !io.probe.valid && io.stage2_ready) {
@@ -301,6 +304,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
       probestatus := false.B
     }
   }
+  io.full := MSHR_st1.io.deq.valid && MSHR_st1.io.deq.bits.full
   //  ******     mshr::allocate_vec_sub/allocate_vec_main     ******
   /*0:PRIMARY_AVAIL 1:PRIMARY_FULL 2:SECONDARY_AVAIL 3:SECONDARY_FULL*/
   io.missReq.ready := !(mshrStatus_st1_w === 1.U || mshrStatus_st1_w === 3.U )

@@ -429,10 +429,10 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   coreReqInvOrFluValid_st1 := coreReq_st1_valid &&
     (coreReqControl_st1_Q.io.deq.bits.isInvalidate || coreReqControl_st1_Q.io.deq.bits.isFlush)
   val coreReqInv_st1: Bool = coreReqControl_st1_Q.io.deq.bits.isInvalidate
-  TagAccess.io.flushChoosen.get.valid := (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
-    TagAccess.io.hasDirty_st0.get//TODO add LRSC cond
-  TagAccess.io.flushChoosen.get.bits := //TODO add LRSC cond
-    Cat(TagAccess.io.dirtySetIdx_st0.get,TagAccess.io.dirtyWayMask_st0.get)
+  //TagAccess.io.flushChoosen.get.valid := (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
+  //  TagAccess.io.hasDirty_st0.get//TODO add LRSC cond
+  //TagAccess.io.flushChoosen.get.bits := //TODO add LRSC cond
+  //  Cat(TagAccess.io.dirtySetIdx_st0.get,TagAccess.io.dirtyWayMask_st0.get)
   val DataAccessInvOrFluSRAMRReq = Wire(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
   val dataAccessInvOrFluRValid = (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
     TagAccess.io.hasDirty_st0.get//same to TagAccess.io.flushChoosen.get.valid

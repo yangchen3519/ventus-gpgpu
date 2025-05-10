@@ -106,9 +106,12 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   TagAccess.io.probeRead.valid        := coreReqPipe.io.st0_valid
   ReplayTable.io.RTABReq_st0     <> coreReqPipe.io.Req_st0_RTAB
   TagAccess.io.invalidateAll     := coreReqPipe.io.invalidate_tA
+  TagAccess.io.flushChoosen.get  := coreReqPipe.io.flushDirty_tA
   // st1
   TagAccess.io.tagFromCore_st1        := coreReqPipe.io.tagFromCore_tA_st1
   TagAccess.io.probeIsWrite_st1.get       := coreReqPipe.io.coreReq_Control_st1.isWrite
+  TagAccess.io.probeIsUncache_st1       := coreReqPipe.io.coreReq_Control_st1.isUncached
+  TagAccess.io.tagready_st1    := coreReqPipe.io.st1_ready
   if(MMU_ENABLED){
     TagAccess.io.asidFromCore_st1.get := coreReqPipe.io.asidFromCore_tA_st1.get
   }
@@ -117,6 +120,9 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   SMshrAccess.io.missReq       <> coreReqPipe.io.Probe_SMSHR
   MshrAccess.io.missReq        <> coreReqPipe.io.MissReq_MSHR
   MshrAccess.io.missCached_st1 := coreReqPipe.io.MissCached_MSHR
+  MshrAccess.io.stage1_ready  := coreReqPipe.io.st1_ready
+  SMshrAccess.io.stage1_ready := coreReqPipe.io.st1_ready
+
   io.coreRsp <> coreReqPipe.io.CoreRsp
 
   // ------memRspPipe input connection------
@@ -140,7 +146,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   SMshrAccess.io.missRspIn        <> memRspPipe.io.SMSHRMissRsp
   WshrAccess.io.popReq            <> memRspPipe.io.WSHRPopReq
   //rtab
-  ReplayTable.io.mshrFull := MshrAccess.io.probeOut_st1.probeStatus === 1.U
+  ReplayTable.io.mshrFull := MshrAccess.io.full
   ReplayTable.io.LRexist  := SMshrAccess.io.probeOut_st1.LRexist
   ReplayTable.io.pushedWSHRIdxUpdate.valid := WshrAccess.io.pushReq.valid
   ReplayTable.io.pushedWSHRIdxUpdate.bits.wshrIdx  := WshrAccess.io.pushedIdx
@@ -159,6 +165,10 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   TagAccess.io.allocateWriteTagSRAMWValid_st1 := memRspPipe.io.dAmemRsp_wReq_valid
  TagAccess.io.allocateWriteData_st1 := get_tag(MshrAccess.io.missRspOut.bits.blockAddr)
   // tag access
+  //mshr
+  MshrAccess.io.stage2_ready  := MemReqArb.io.in(1).ready
+  SMshrAccess.io.stage2_ready := MemReqArb.io.in(1).ready
+
   // memory request arbiter
   // source: dirty replace / core Req ( miss, uncached dirty writeback, flush and invalidate)
   MemReqArb.io.in(1) <> coreReqPipe.io.MissReq_Mem
@@ -197,7 +207,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
 
   //memReq_Q.io.deq.bits.a_addr >> (WordLength - TagBits - SetIdxBits)
   val wshrProtect = WshrAccess.io.conflict && (memReqIsWrite_st3 || memReqIsRead_st3) && memReq_Q.io.deq.valid// && io.memReq.ready
-  val cRspBlockedOrWshrFull = ((!coreReqPipe.io.st3_ready && memReq_Q.io.deq.bits.hasCoreRsp)
+  val cRspBlockedOrWshrFull = ((!coreReqPipe.io.st2_ready && memReq_Q.io.deq.bits.hasCoreRsp)
     || !WshrAccess.io.pushReq.ready) && memReqIsWrite_st3
   val wshrPass = !wshrProtect && !cRspBlockedOrWshrFull
   val PushWshrValid = wshrPass && memReq_Q.io.deq.fire && memReqIsWrite_st3

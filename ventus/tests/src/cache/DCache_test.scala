@@ -42,43 +42,53 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
         control = false,
         mmu = false
       )
-    )(p)).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
+    )).withAnnotations(Seq(WriteVcdAnnotation)) { dut =>
       // 初始化信号
-      dut.io.coreReq.initSource().setSourceClock(dut.clock)
-      dut.io.coreRsp.initSink().setSinkClock(dut.clock)
+      dut.io.coreReq.initSource()
+      dut.io.coreRsp.initSink()
       dut.io.coreRsp.ready.poke(true.B)
 
       // 测试写操作
-      val writeReq = new DCacheCoreReq(None)(p)
-      writeReq.instrId := 0.U
-      writeReq.opcode := 1.U  // 写操作
-      writeReq.param := 0.U
-      writeReq.tag := "h123".U
-      writeReq.setIdx := "h45".U
-      writeReq.perLaneAddr(0).activeMask := true.B
-      writeReq.perLaneAddr(0).blockOffset := 0.U
-      writeReq.perLaneAddr(0).wordOffset1H := "b1111".U
-      writeReq.data(0) := "h12345678".U
-      dut.io.coreReq.enqueue(writeReq)
+      dut.io.coreReq.valid.poke(true.B)
+      dut.io.coreReq.bits.instrId.poke(0.U)
+      dut.io.coreReq.bits.opcode.poke(1.U)  // 写操作
+      dut.io.coreReq.bits.param.poke(0.U)
+      dut.io.coreReq.bits.tag.poke("h123".U)
+      dut.io.coreReq.bits.setIdx.poke("h2".U)
+      dut.io.coreReq.bits.perLaneAddr(0).activeMask.poke(true.B)
+      dut.io.coreReq.bits.perLaneAddr(0).blockOffset.poke(0.U)
+      dut.io.coreReq.bits.perLaneAddr(0).wordOffset1H.poke("b1111".U)
+      dut.io.coreReq.bits.data(0).poke("h12345678".U)
+      dut.clock.step(1)
+      dut.io.coreReq.valid.poke(false.B)
+      //dut.io.coreReq.enqueue((new DCacheCoreReq(None)(p)).Lit(
+      //  _.instrId     -> 0.U,
+      //  _.opcode      -> 1.U,  // 写操作
+      //  _.param       -> 0.U,
+      //  _.tag         -> "h123".U,
+      //  _.setIdx                     ->"h45".U,
+      //  _.perLaneAddr(0).activeMask   ->true.B,
+      //  _.perLaneAddr(0).blockOffset  ->0.U,
+      //  _.perLaneAddr(0).wordOffset1H ->"b1111".U,
+      //  _.data(0)      -> "h12345678".U
+      //))
       
       dut.clock.step(5)
 
-      // 测试读操作
-      val readReq = new DCacheCoreReq(None)(p)
-      readReq.instrId := 1.U
-      readReq.opcode := 0.U  // 读操作
-      readReq.param := 0.U
-      readReq.tag := "h123".U
-      readReq.setIdx := "h45".U
-      readReq.perLaneAddr(0).activeMask := true.B
-      readReq.perLaneAddr(0).blockOffset := 0.U
-      readReq.perLaneAddr(0).wordOffset1H := "b1111".U
-      dut.io.coreReq.enqueue(readReq)
-
-      // 等待响应
-      dut.clock.step(10)
-      
-
+      //// 测试读操作
+      //val readReq = new DCacheCoreReq(None)(p)
+      //readReq.instrId.poke(1.U)
+      //readReq.opcode.poke(0.U)  // 读操作
+      //readReq.param.poke(0.U)
+      //readReq.tag.poke("h123".U)
+      //readReq.setIdx.poke("h45".U)
+      //readReq.perLaneAddr(0).activeMask.poke(true.B)
+      //readReq.perLaneAddr(0).blockOffset.poke(0.U)
+      //readReq.perLaneAddr(0).wordOffset1H.poke("b1111".U)
+      //dut.io.coreReq.enqueue(readReq)
+//
+      //// 等待响应
+      //dut.clock.step(10)
     }
   }
 } 

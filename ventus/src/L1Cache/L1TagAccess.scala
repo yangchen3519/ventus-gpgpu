@@ -61,7 +61,7 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     val dirtyTag_st1 = if (!readOnly) {Some(Output(UInt(tagBits.W)))} else None
     val dirtyASID_st1 = if(MMU_ENABLED) {Some(Output(UInt(AsidBits.W)))} else None
     //For InvOrFlu and LRSC
-    val flushChoosen = if (!readOnly) {Some(Flipped(ValidIO(UInt((log2Up(set)+way).W))))} else None
+    val flushChoosen = if (!readOnly) {Some(Input(Bool()))} else None
     //For Inv
     val invalidateAll = Input(Bool())
     val tagready_st1 = Input(Bool())
@@ -209,11 +209,11 @@ if(MMU_ENABLED) {
   io.hitStatus_st1.tag := tagBodyAccess.io.r.resp.data(OHToUInt(io.hitStatus_st1.waymask))
   io.waymaskHit_st1 := Mux(cachehit_hold.io.deq.valid & cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
   if(!readOnly){//tag_array::write_hit_mark_dirty
-    assert(!(iTagChecker.io.cache_hit && io.probeIsWrite_st1.get && io.flushChoosen.get.valid),"way_dirty write-in conflict!")
+    assert(!(iTagChecker.io.cache_hit && io.probeIsWrite_st1.get && io.flushChoosen.get),"way_dirty write-in conflict!")
     when(iTagChecker.io.cache_hit && io.probeIsWrite_st1.get){////meta_entry_t::write_dirty
       way_dirty(RegNext(io.probeRead.bits.setIdx))(OHToUInt(iTagChecker.io.waymask)) := true.B
-    }.elsewhen(io.flushChoosen.get.valid){//tag_array::flush_one
-      way_dirty(io.flushChoosen.get.bits((log2Up(set)+way)-1,way))(OHToUInt(io.flushChoosen.get.bits(way-1,0))) := false.B
+    }.elsewhen(io.flushChoosen.get){//tag_array::flush_one
+      way_dirty(choosenDirtySetIdx_st0)(OHToUInt(choosenDirtyWayMask_st0)) := false.B
     }.elsewhen(io.needReplace.get) {
       way_dirty(allocateWrite_st1.setIdx)(OHToUInt(Replacement.io.waymask_st1)) := false.B
     }.elsewhen(iTagChecker.io.cache_hit && io.probeIsUncache_st1){

@@ -73,9 +73,9 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     blockAddrMatchInRTAB(i) := (Cat(Req_access(i).tag,Req_access(i).setIdx) === Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx))  && EntryValid(i)
       //(Req_access(i).tag === io.coreReq_st1.bits.tag) && (Req_access(i).setIdx === io.coreReq_st1.bits.setIdx) &&  EntryValid(i)
   }
-  val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR && io.RTABReq_st0.valid // st0 request match in RTAB
+  val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR // st0 request match in RTAB
   val bAMatch_st1 = (Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx) === Cat(io.RTABReq_st1.bits.CoreReqData.tag,io.RTABReq_st1.bits.CoreReqData.setIdx)) &&
-    io.RTABReq_st0.valid && io.RTABReq_st1.valid // st0 request match in st1 request
+    io.RTABReq_st1.valid // st0 request match in st1 request
   val bAMatchIdx = OHToUInt(Cat(bAMatch_st0))
 
   io.checkRTABhit := bAMatch_st0 || bAMatch_st1//will ready st0, but not valid st1 <- request will be in RTAB
