@@ -106,7 +106,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
             sys.exit(1)
           }
           dut.io.coreReq.bits.data(0).poke(fields(7).U)
-          println("op="+fields(0),", blockaddr="+fields(4))
+         // println("op="+fields(0),", blockaddr="+fields(4))
           fork
             .withRegion(Monitor) {
               while (dut.io.coreReq.ready.peek().litToBoolean == false) {

@@ -37,6 +37,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val SMSHREmpty     = Input(Bool())
     val tA_dirtySetIdx_st0 = Input(UInt(dcache_SetIdxBits.W))
     val tA_dirtyWayMask_st0= Input(UInt(dcache_NWays.W))
+    val reqSource      = Input(Bool()) // 1- from RTAB 0 - from io
 
     val Probe_MSHR     = Output(new MSHRprobe(bABits, asidLen))
     val probeAsid      = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
@@ -74,6 +75,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     // missReq_Mem for read write miss and flu inv dirty write back
     val MissReq_Mem         = DecoupledIO(new WshrMemReq)
     val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
+    val WriteReq_dA_valid   = Output(Vec(BlockWords,Bool()))
     val WriteHit_st1        = Output(Bool())
 
     //st2
@@ -142,7 +144,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.Req_st0_RTAB.bits.ReqType     := DontCare
   io.Req_st0_RTAB.bits.mshrIdx     := DontCare
   io.Req_st0_RTAB.bits.wshrIdx     := DontCare
-  io.Req_st0_RTAB.valid            := io.RTABHit && io.CoreReq.valid
+  io.Req_st0_RTAB.valid            := io.RTABHit && io.CoreReq.valid && !io.reqSource
   io.CoreReq.ready := st0_ready
   //Flush L2 FSM
   val idle :: flushing :: responding :: Nil = Enum(3)
@@ -173,7 +175,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // st0 st1 pipe reg enq valid
   st0_valid := false.B
   st0_ready := false.B
-  when(!io.RTABHit ){
+  when(!(io.RTABHit && !io.reqSource)){
     // probe SMSHR MSHR and tag
     when(CoreReqControl_st0.isRead || CoreReqControl_st0.isWrite|| CoreReqControl_st0.isAMO || CoreReqControl_st0.isLR || CoreReqControl_st0.isSC){
       st0_valid  := io.CoreReq.valid && io.Probe_tA_ready
@@ -264,7 +266,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val UCReqHitDirty  = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isUncached
   io.CacheHit_st1 := CacheHit_st1
   io.WriteHit_st1 := WriteHit_st1
-  missMemReq_valid := (CacheMiss_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire
+  missMemReq_valid := (CacheMiss_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire && !io.Req_st1_RTAB.valid
   // RTABReqType req
   val Req_RTAB_st1_valid = Wire(Bool())
   Req_RTAB_st1_valid := false.B
@@ -375,6 +377,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.Probe_SMSHR.bits.Type := 0.U
   // todo add probe type
   io.Probe_SMSHR.valid := CoreReq_pipeReg_st0_st1.deq.valid 
+  when(Control_st1.isAMO){
+    io.Probe_SMSHR.bits.Type := 3.U
+  }.elsewhen(Control_st1.isLR){
+    io.Probe_SMSHR.bits.Type := 1.U
+  }.elsewhen(Control_st1.isSC){
+    io.Probe_SMSHR.bits.Type := 2.U
+  }
 
   //st1 ready
   st1_ready := false.B
@@ -430,8 +439,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   //this setIdx = setIdx + wayIdx
   DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat( CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask)))
   for (i <- 0 until BlockWords){
-    DataAccessWriteHitSRAMWReq(i).waymask.get := addrGen.io.MaskOut(getBankEn.io.perBankBlockIdx(i))
-    DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(getBankEn.io.perBankBlockIdx(i)).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
+    DataAccessWriteHitSRAMWReq(i).waymask.get := addrGen.io.MaskOut(i)
+    io.WriteReq_dA_valid(i) := addrGen.io.MaskOut(i).orR
+    DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
   }
   io.WriteReq_dA := DataAccessWriteHitSRAMWReq
     //st1 valid: enqueue st1 st2 pipe reg for coreRsp
@@ -441,12 +451,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(!Req_RTAB_st1_valid){
     when(Control_st1.isRead && io.tA_Hit_st1.hit){
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
-    }.elsewhen(Control_st1.isWrite){
-      when(CacheHitDirty_st1){
-        st1_valid := false.B
-    }.otherwise{
+    }.elsewhen(Control_st1.isWrite){     
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
-    }
+    
   }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
     st1_valid := CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === responding)
   }.otherwise{

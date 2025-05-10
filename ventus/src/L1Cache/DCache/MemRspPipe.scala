@@ -33,7 +33,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
          val memRspIsFlu = Output(Bool())
          //st0
          val tAAllocateWriteReq = ValidIO(new SRAMBundleA(NSets)) // ta allocate write
-         val RTABUpdateReq      = ValidIO(new RTABUpdate) // Update RTAB
+         val RTABUpdateReq       = ValidIO(new RTABUpdate) // Update RTAB
          val MSHRMissRsp        = Decoupled(new MSHRmissRspIn(NMshrEntry))
          val SMSHRMissRsp       = Decoupled(new MSHRmissRspIn(NMshrEntry))
          val WSHRPopReq         = ValidIO(UInt(log2Up(NMshrEntry).W))         
@@ -119,14 +119,14 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
        }.elsewhen(memRspisLRSC || memRspisAMO){
            st0_valid := io.SMSHRMissRsp.ready // to check
        }.elsewhen(memRspisRead){
-           st0_valid := !io.MSHRMissRsp.ready
+           st0_valid := io.memRsp.valid
        }
     }
     MemRsp_pipeReg_st0_st1.enq.valid := st0_valid
     MemRsp_pipeReg_st0_st1.enq.bits.Rsp := io.memRsp.bits
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
     MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisFlushOrInv || memRspisLRSC || memRspisAMO
-    MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,io.MSHRMissRspOutUCached,false.B)
+    MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
 
     missRspTI_st1 := Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.bits.targetInfo.asTypeOf(new VecMshrTargetInfo),

@@ -43,7 +43,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
       way=BytesOfWord,
       shouldReset = false,
       holdRead = false,
-      singlePort = false
+      singlePort = false,
+      bypassWrite = true
     ))
   }
     // pipelines
@@ -59,7 +60,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
       memRspPipe.io.dAReplace_rReq(i), coreReqPipe.io.read_Req_dA.bits(i))
-    DataAccesses(i).io.w.req.valid := coreReqPipe.io.WriteHit_st1 || memRspPipe.io.dAmemRsp_wReq_valid
+    DataAccesses(i).io.w.req.valid := coreReqPipe.io.WriteHit_st1 && coreReqPipe.io.WriteReq_dA_valid(i) || memRspPipe.io.dAmemRsp_wReq_valid
     DataAccesses(i).io.w.req.bits := Mux(memRspPipe.io.dAmemRsp_wReq_valid,
       memRspPipe.io.dAmemRsp_wReq(i), coreReqPipe.io.WriteReq_dA(i))
   }
@@ -81,6 +82,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.SMSHREmpty             := SMshrAccess.io.empty
   coreReqPipe.io.tA_dirtySetIdx_st0     := TagAccess.io.dirtySetIdx_st0.get
   coreReqPipe.io.tA_dirtyWayMask_st0    := TagAccess.io.dirtyWayMask_st0.get
+  coreReqPipe.io.reqSource              := CoreReqArb.io.out.valid && ReplayTable.io.coreReq_replay.valid
   coreReqPipe.io.Probe_tA_ready         := TagAccess.io.probeRead.ready
   // st1
   coreReqPipe.io.tA_Hit_st1             := TagAccess.io.hitStatus_st1
@@ -311,8 +313,12 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   io.memReq.get.valid := memReq_valid
   // print 
   if(DCACHE_DEBUG){
+    when(io.coreReq.fire){
+      printf(p"---- REQ: \n instrId = ${io.coreReq.bits.instrId}, opcode = ${io.coreReq.bits.opcode},tag=${Hexadecimal(io.coreReq.bits.tag)},")
+      printf(p"set=${Hexadecimal(io.coreReq.bits.setIdx)},data0 = ${Hexadecimal(io.coreReq.bits.data(0))}\n")
+    }    
     when(io.coreRsp.valid){
-      printf(p"dcache core rsp: instrId = ${io.coreRsp.bits.instrId}, data0 = ${io.coreRsp.bits.data(0)}\n")
+      printf(p"++++ RSP: \n instrId = ${io.coreRsp.bits.instrId}, data0 = ${Hexadecimal(io.coreRsp.bits.data(0))}\n")
     }
   }
 }

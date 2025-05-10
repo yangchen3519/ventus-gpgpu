@@ -38,7 +38,7 @@ class SMSHRmissReq (val bABits: Int, val tIWdith: Int, val WIdBits: Int, val Asi
   val instrId = UInt(WIdBits.W)
   val targetInfo = UInt(tIWdith.W)
   val wordOffset = UInt(dcache_BlockOffsetBits.W)
-  val Type = UInt(2.W) // 0-lr 1- sc 2-amo
+  val Type = UInt(2.W) // 1-lr 2- sc 3-amo 0- normal
 }
 class SMSHRprobeOut(val NEntry: Int) extends Bundle{
   val hitblockIdx = UInt(log2Up(NEntry).W)
@@ -448,7 +448,7 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   io.full := entry_valid.reduce(_&&_)
   io.missRspOut <> missRspOut_st1.io.deq
    for (iofEn <- 0 until NMshrEntry) {
-      when(iofEn.asUInt === entryStatus.io.next  && io.missReq.fire) {
+      when(iofEn.asUInt === entryStatus.io.next  && io.missReq.fire && io.missReq.bits.Type =/= 0.U) {
         entry_valid(iofEn) := true.B
       }.elsewhen(iofEn.asUInt === entryMatchMissRsp  &&
         io.missRspIn.valid && missRspOut_st1.io.enq.ready) {
