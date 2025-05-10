@@ -264,7 +264,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val UCReqHitDirty  = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isUncached
   io.CacheHit_st1 := CacheHit_st1
   io.WriteHit_st1 := WriteHit_st1
-  missMemReq_valid := CacheMiss_st1 || UCReqHitNDirty
+  missMemReq_valid := (CacheMiss_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire
   // RTABReqType req
   val Req_RTAB_st1_valid = Wire(Bool())
   Req_RTAB_st1_valid := false.B
@@ -361,7 +361,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val mshrMissReqTI = Wire(new VecMshrTargetInfo)
   mshrMissReqTI.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
   mshrMissReqTI.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
-  io.MissReq_MSHR.valid := ReadMiss_st1 && st1_valid
+  io.MissReq_MSHR.valid := ReadMiss_st1 && CoreReq_pipeReg_st0_st1.deq.valid
   io.MissReq_MSHR.bits.blockAddr := BlockAddr_st1
   io.MissReq_MSHR.bits.targetInfo := mshrMissReqTI.asUInt
   io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
@@ -374,7 +374,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 ).reduce(_ | _)
   io.Probe_SMSHR.bits.Type := 0.U
   // todo add probe type
-  io.Probe_SMSHR.valid := st1_valid 
+  io.Probe_SMSHR.valid := CoreReq_pipeReg_st0_st1.deq.valid 
 
   //st1 ready
   st1_ready := false.B

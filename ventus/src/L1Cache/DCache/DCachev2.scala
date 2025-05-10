@@ -19,6 +19,7 @@ import config.config.Parameters
 import firrtl.Utils._
 import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_WordOffsetBits, num_block, num_thread}
 import mmu.SV32.{asidLen, paLen, vaLen}
+import top.parameters.DCACHE_DEBUG
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
   val io = IO(new Bundle{
@@ -308,4 +309,10 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     memReq_valid := memReq_Q.io.deq.fire
   }
   io.memReq.get.valid := memReq_valid
+  // print 
+  if(DCACHE_DEBUG){
+    when(io.coreRsp.valid){
+      printf(p"dcache core rsp: instrId = ${io.coreRsp.bits.instrId}, data0 = ${io.coreRsp.bits.data(0)}\n")
+    }
+  }
 }
