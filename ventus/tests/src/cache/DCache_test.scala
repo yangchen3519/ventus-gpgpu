@@ -1,4 +1,4 @@
-package cache
+package play.cache
 
 import chisel3._
 import chisel3.util._
@@ -47,6 +47,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       dut.io.coreReq.initSource()
       dut.io.coreRsp.initSink()
       dut.io.coreRsp.ready.poke(true.B)
+      dut.clock.setTimeout(50)
       //dut.io.pipe_req.bits.addr := Cat(blockAddr, blockAddrOffset)
 
       dut.io.coreReq.valid.poke(false.B)
@@ -58,37 +59,24 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       dut.clock.step(5)
 
       
-      val filename = s"ventus/txt/DCache/DCacheTestFile.txt"
+      val filename = s"ventus/txt/DCache/Whit_flush.txt"
       val file = scala.io.Source.fromFile(filename)
       val fileLines = file.getLines()
 
       for (line <- fileLines) {
         if (line.trim.nonEmpty) { // 检测line变量是否为空行
           val fields = line.split(",")// 字段中不允许存在空格
-          // fields格式：
-          // 0: op,
-          // 1: param,
-          // 2: warp id,
-          // 3: reg idx,
-          // 4: block idx,
-          // 5: block offset(0),
-          // 6: vector or scalar,
-          // 7: data(0)
-          if (fields.length != 8) {
-            println("错误：元素个数不为8！")
-            sys.exit(1)
-          }
           dut.io.coreReq.valid.poke(true.B)
-          dut.io.coreReq.bits.opcode.poke(fields(0).U)
-          dut.io.coreReq.bits.param.poke(fields(1).U)
-          dut.io.coreReq.bits.instrId.poke(fields(3).U)
-          val blockIdxFromTxt = fields(4).U
+          dut.io.coreReq.bits.opcode.poke(fields(4).U)
+          dut.io.coreReq.bits.param.poke(fields(5).U)
+          dut.io.coreReq.bits.instrId.poke(fields(0).U)
+          val blockIdxFromTxt = fields(1).U
           val tagFromTxt = blockIdxFromTxt(dut.dcache.SetIdxBits+dut.dcache.TagBits-1,dut.dcache.SetIdxBits)
           val setIdxFromTxt = blockIdxFromTxt(dut.dcache.SetIdxBits-1,0)
           dut.io.coreReq.bits.tag.poke(tagFromTxt)
           dut.io.coreReq.bits.setIdx.poke(setIdxFromTxt)
           // 目前只支持测试标量
-          dut.io.coreReq.bits.perLaneAddr(0).blockOffset.poke(fields(5).U)
+          dut.io.coreReq.bits.perLaneAddr(0).blockOffset.poke(fields(2).U)
           if(fields(6) == "d0"){
             dut.io.coreReq.bits.perLaneAddr(0).activeMask.poke(true.B)
             dut.io.coreReq.bits.perLaneAddr(0).wordOffset1H.poke("b1111".U)
@@ -105,7 +93,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
             println("错误：vector or scalar栏格式错误！")
             sys.exit(1)
           }
-          dut.io.coreReq.bits.data(0).poke(fields(7).U)
+          dut.io.coreReq.bits.data(0).poke(fields(3).U)
          // println("op="+fields(0),", blockaddr="+fields(4))
           fork
             .withRegion(Monitor) {
@@ -114,16 +102,17 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
               }
             }
             .joinAndStep(dut.clock)
-          
+
         } else {
           dut.io.coreReq.valid.poke(false.B)
           dut.clock.step(1)
+
         }
       }
       //dut.io.coreReq.enqueueSeq()
       dut.io.coreReq.valid.poke(false.B)
 
-      dut.clock.step(30)
+      dut.clock.step(10)
       file.close()
       // 测试写操作
       //dut.io.coreReq.valid.poke(true.B)

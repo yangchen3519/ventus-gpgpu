@@ -1,4 +1,4 @@
-package cache
+package play.cache
 
 import chisel3._
 import chisel3.util._
@@ -187,6 +187,8 @@ class DCacheWrapper(params: InclusiveCacheParameters_lite, SV: Option[mmu.SVPara
     val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
     val coreRsp = DecoupledIO(new DCacheCoreRsp)
   })
+  val buffer = Module(new Queue(new DCacheCoreReq(SV),1))
+  buffer.io.enq <> io.coreReq
 
   // Instantiate AtomicUnit
    val dcache = Module(new DataCachev2(SV)(p))
@@ -194,7 +196,7 @@ class DCacheWrapper(params: InclusiveCacheParameters_lite, SV: Option[mmu.SVPara
   // Instantiate L2ROM
   val l2 = Module(new L2CacheUtillite(params))
 
-  dcache.io.coreReq <> io.coreReq
+  dcache.io.coreReq <> buffer.io.deq
   dcache.io.coreRsp <> io.coreRsp
   dcache.io.memReq.get <> l2.io.memReq
   dcache.io.memRsp <> l2.io.memRsp

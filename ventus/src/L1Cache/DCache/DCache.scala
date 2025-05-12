@@ -92,6 +92,12 @@ class genControl extends Module{
         io.control.isFluInvL2 := true.B
       }.elsewhen(io.param === 2.U){
         io.control.isWaitMSHR := true.B
+      }.elsewhen(io.param === 3.U){
+        io.control.isInvalidate := true.B
+        io.control.isFluInvL2 := false.B
+      }.elsewhen(io.param === 4.U){
+        io.control.isFlush := true.B
+        io.control.isFluInvL2 := false.B
       }
     }
   }
@@ -936,9 +942,15 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val PushWshrValid = wshrPass && memReq_Q.io.deq.fire && memReqIsWrite_st3
   // val WshrPushPopConflict = PushWshrValid && WshrAccess.io.popReq.valid
   // val wshrPushPopConflictReg = RegNext(WshrPushPopConflict)
-  val pushReqbA = memReq_st3_addr.get >> (dcache_WordOffsetBits+dcache_BlockOffsetBits)
+  val pushReqbA = Wire(UInt((paLen - dcache_BlockOffsetBits - dcache_WordOffsetBits).W))//memReq_st3_addr.get >> (dcache_WordOffsetBits+dcache_BlockOffsetBits)
   // val pushReqbAReg = RegNext(pushReqbA)
   WshrAccess.io.pushReq.bits.blockAddr := pushReqbA//Mux(wshrPushPopConflictReg, pushReqbAReg, pushReqbA)
+  if(MMU_ENABLED){
+    pushReqbA := io.TLBRsp.get.bits.paddr  >> (dcache_WordOffsetBits+dcache_BlockOffsetBits)
+  }
+  else{
+     pushReqbA := memReq_Q.io.deq.bits.a_addr.get  >> (dcache_WordOffsetBits+dcache_BlockOffsetBits)
+  }
 
   WshrAccess.io.pushReq.valid := PushWshrValid//Mux(wshrPushPopConflictReg,true.B,Mux(WshrPushPopConflict,false.B,PushWshrValid))//wshrPass && memReq_Q.io.deq.fire() && memReqIsWrite_st3
   coreRsp_st2_valid_from_memReq := WshrAccess.io.pushReq.valid && memReq_Q.io.deq.bits.hasCoreRsp && !coreRsp_st2_valid_from_memRsp

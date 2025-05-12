@@ -125,7 +125,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     MemRsp_pipeReg_st0_st1.enq.valid := st0_valid
     MemRsp_pipeReg_st0_st1.enq.bits.Rsp := io.memRsp.bits
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
-    MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisFlushOrInv || memRspisLRSC || memRspisAMO
+    MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisLRSC || memRspisAMO
     MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
 
     missRspTI_st1 := Mux(memRsp_st1_isSpecial,

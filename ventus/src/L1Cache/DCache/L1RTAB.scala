@@ -77,33 +77,20 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR // st0 request match in RTAB
   val bAMatch_st1 = (Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx) === Cat(io.RTABReq_st1.bits.CoreReqData.tag,io.RTABReq_st1.bits.CoreReqData.setIdx)) &&
     io.RTABReq_st1.valid // st0 request match in st1 request
-  val bAMatchIdx = OHToUInt(Cat(bAMatch_st0))
+  val bAMatchIdx = OHToUInt(Cat(blockAddrMatchInRTAB))
 
   io.checkRTABhit := bAMatch_st0 || bAMatch_st1//will ready st0, but not valid st1 <- request will be in RTAB
 
 
   ptrEnqValid := false.B
   // RTAB push req st1
-  when(io.RTABReq_st1.valid && !(bAMatch_st0 || bAMatch_st1)){ //st1 request but no st0 hit
+  when(io.RTABReq_st1.valid && !io.RTABReq_st0.valid){ //st1 request but no st0 hit
     Req_access(ptr_w) := io.RTABReq_st1.bits.CoreReqData
     Replay_type(ptr_w) := io.RTABReq_st1.bits.ReqType
     wshr_idx(ptr_w) := io.RTABReq_st1.bits.wshrIdx
     mshr_idx(ptr_w) := io.RTABReq_st1.bits.mshrIdx
     EntryValid(ptr_w) := true.B
     ptr := ptr_w + 1.U
-    when(bAMatch_st1){
-      Req_access(ptr_w_2) := io.RTABReq_st0.bits.CoreReqData
-      Replay_type(ptr_w_2) := hitRTAB
-      //RTAB_idx(ptr_w_2) := ptr_w
-      EntryValid(ptr_w_2) := true.B
-      ptr := ptr_w_2 + 1.U
-    }.elsewhen(bAMatch_st0){
-      Req_access(ptr_w_2) := io.RTABReq_st0.bits.CoreReqData
-      Replay_type(ptr_w_2) := hitRTAB
-      //RTAB_idx(ptr_w_2) := bAMatchIdx
-      EntryValid(ptr_w_2) := true.B
-      ptr := ptr_w_2 + 1.U
-    }
   }.elsewhen(io.RTABReq_st1.valid && (bAMatch_st0)){ //st1 request and st0 hit in RTAB entry
     //st1
     Req_access(ptr_w) := io.RTABReq_st1.bits.CoreReqData
@@ -119,7 +106,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     mshr_idx(ptr_w_2) := DontCare
     RTABlink_idx(bAMatchIdx) := Cat(1.U,ptr_w_2)
     EntryValid(ptr_w_2) := true.B
-  }.elsewhen(io.RTABReq_st1.valid && (bAMatch_st1)){ //st1 request and st0 hit in st1 req
+  }.elsewhen(io.RTABReq_st1.valid && (bAMatch_st1) && io.RTABReq_st0.valid){ //st1 request and st0 hit in st1 req
     Req_access(ptr_w) := io.RTABReq_st1.bits.CoreReqData
     Replay_type(ptr_w) := io.RTABReq_st1.bits.ReqType
     wshr_idx(ptr_w) := io.RTABReq_st1.bits.wshrIdx
@@ -136,9 +123,9 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   }.elsewhen(bAMatch_st0 && io.RTABReq_st0.valid){ // only st0 request
     Req_access(ptr_w) := io.RTABReq_st0.bits.CoreReqData
     Replay_type(ptr_w) := hitRTAB
-    wshr_idx(ptr_w_2) := DontCare
-    mshr_idx(ptr_w_2) := DontCare
-    RTABlink_idx(bAMatchIdx) := Cat(1.U,ptr_w)
+    wshr_idx(ptr_w) := DontCare
+    mshr_idx(ptr_w) := DontCare
+    RTABlink_idx(bAMatchIdx) := Cat(1.U,OHToUInt(bAMatchIdx))
     EntryValid(ptr_w) := true.B
     ptr := ptr_w + 1.U
   }
