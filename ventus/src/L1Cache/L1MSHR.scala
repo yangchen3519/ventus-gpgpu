@@ -436,7 +436,7 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   //val missRspASID_st0 = ASID_Access(entryMatchMissRsp)
   val missRspOut_st1 = Module(new Queue(new MSHRmissRspOut(bABits, tIWidth, WIdBits, AsidBits),1,true,false))
   io.missRspIn.ready := missRspOut_st1.io.enq.ready && !io.missReq.valid
-  missRspOut_st1.io.enq.valid := io.missRspIn.valid
+  missRspOut_st1.io.enq.valid := io.missRspIn.valid && !io.missReq.valid
   missRspOut_st1.io.enq.bits.targetInfo := missRspTargetInfo_st0
   missRspOut_st1.io.enq.bits.blockAddr := missRspBlockAddr_st0
   missRspOut_st1.io.enq.bits.instrId := io.missRspIn.bits.instrId

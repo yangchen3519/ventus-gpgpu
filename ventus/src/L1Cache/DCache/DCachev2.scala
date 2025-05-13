@@ -325,5 +325,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     when(io.coreRsp.valid){
       printf(p"++++ RSP: \n instrId = ${io.coreRsp.bits.instrId}, data0 = ${Hexadecimal(io.coreRsp.bits.data(0))}\n")
     }
+    when(io.memReq.get.fire){
+      printf(p"===mem Req from cache addr = ${Hexadecimal(io.memReq.get.bits.a_addr.get)}, opcode = ${io.memReq.get.bits.a_opcode}, param = ${io.memReq.get.bits.a_param}\n")
+    }
   }
 }

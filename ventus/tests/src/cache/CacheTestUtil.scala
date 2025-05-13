@@ -201,3 +201,48 @@ class DCacheWrapper(params: InclusiveCacheParameters_lite, SV: Option[mmu.SVPara
   dcache.io.memReq.get <> l2.io.memReq
   dcache.io.memRsp <> l2.io.memRsp
 } 
+
+
+
+class DCacheWrapperWithAtomic(params: InclusiveCacheParameters_lite, SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends Module {
+  val io = IO(new Bundle {
+    val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
+    val coreRsp = DecoupledIO(new DCacheCoreRsp)
+  })
+  val buffer = Module(new Queue(new DCacheCoreReq(SV),1))
+  buffer.io.enq <> io.coreReq
+
+  // Instantiate AtomicUnit
+   val dcache = Module(new DataCachev2(SV)(p))
+   val ATUN =  Module(new AtomicUnit(params))
+  
+  // Instantiate L2ROM
+  val l2 = Module(new L2CacheUtil(params))
+
+  // Add converter for memReq
+
+  
+  dcache.io.coreReq <> buffer.io.deq
+  dcache.io.coreRsp <> io.coreRsp
+
+  ATUN.io.L12ATUmemReq.valid := dcache.io.memReq.get.valid
+  ATUN.io.L12ATUmemReq.bits.opcode    := dcache.io.memReq.get.bits.a_opcode
+  ATUN.io.L12ATUmemReq.bits.size      := DontCare
+  ATUN.io.L12ATUmemReq.bits.source    := dcache.io.memReq.get.bits.a_source
+  ATUN.io.L12ATUmemReq.bits.address   := dcache.io.memReq.get.bits.a_addr.get
+  ATUN.io.L12ATUmemReq.bits.mask      := dcache.io.memReq.get.bits.a_mask.asTypeOf(ATUN.io.L12ATUmemReq.bits.mask)
+  ATUN.io.L12ATUmemReq.bits.data      := dcache.io.memReq.get.bits.a_data.asTypeOf(ATUN.io.L12ATUmemReq.bits.data)
+  ATUN.io.L12ATUmemReq.bits.param     := dcache.io.memReq.get.bits.a_param
+  dcache.io.memReq.get.ready := ATUN.io.L12ATUmemReq.ready
+
+  dcache.io.memRsp.valid  := ATUN.io.ATU2L1memRsp.valid
+  dcache.io.memRsp.bits.d_opcode    :=   ATUN.io.ATU2L1memRsp.bits.opcode
+  dcache.io.memRsp.bits.d_param     :=   ATUN.io.ATU2L1memRsp.bits.param
+  dcache.io.memRsp.bits.d_addr      :=   ATUN.io.ATU2L1memRsp.bits.address
+  dcache.io.memRsp.bits.d_data      :=   ATUN.io.ATU2L1memRsp.bits.data.asTypeOf(dcache.io.memRsp.bits.d_data)
+  dcache.io.memRsp.bits.d_source    :=   ATUN.io.ATU2L1memRsp.bits.source
+  ATUN.io.ATU2L1memRsp.ready := dcache.io.memRsp.ready
+
+  ATUN.io.ATU2L2memReq <> l2.io.memReq
+  ATUN.io.L22ATUmemRsp <> l2.io.memRsp
+} 

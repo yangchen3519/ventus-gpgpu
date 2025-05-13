@@ -17,18 +17,18 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
   implicit val p: Parameters = (new MyConfig).toInstance
   
   "DCacheWrapper_test" in {
-    test(new DCacheWrapper(
+    test(new DCacheWrapperWithAtomic(
       params = InclusiveCacheParameters_lite(
         cache = CacheParameters(
           level = 2,
           ways = 8,
-          sets = 64,
+          sets = 32,
           l2cs = 1,
           blockBytes = 64,
-          beatBytes = 8
+          beatBytes = dcache_BlockWords << 2
         ),
         micro = InclusiveCacheMicroParameters(
-          writeBytes = 8,
+          writeBytes = 1,
           memCycles = 40,
           portFactor = 4,
           num_warp = 32,
@@ -36,7 +36,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
           num_sm_in_cluster = 2,
           num_cluster = 2,
           NMshrEntry = 16,
-          NSets = 64,
+          NSets = 32,
           NInfWriteEntry = 8
         ),
         control = false,
@@ -47,7 +47,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       dut.io.coreReq.initSource()
       dut.io.coreRsp.initSink()
       dut.io.coreRsp.ready.poke(true.B)
-      dut.clock.setTimeout(50)
+      dut.clock.setTimeout(60)
       //dut.io.pipe_req.bits.addr := Cat(blockAddr, blockAddrOffset)
 
       dut.io.coreReq.valid.poke(false.B)
@@ -59,7 +59,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       dut.clock.step(5)
 
       
-      val filename = s"ventus/txt/DCache/Whit_flush.txt"
+      val filename = s"ventus/txt/DCache/LRSC.txt"
       val file = scala.io.Source.fromFile(filename)
       val fileLines = file.getLines()
 
@@ -112,7 +112,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       //dut.io.coreReq.enqueueSeq()
       dut.io.coreReq.valid.poke(false.B)
 
-      dut.clock.step(10)
+      dut.clock.step(30)
       file.close()
       // 测试写操作
       //dut.io.coreReq.valid.poke(true.B)

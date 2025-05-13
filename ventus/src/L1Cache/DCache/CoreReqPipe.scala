@@ -364,7 +364,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val mshrMissReqTI = Wire(new VecMshrTargetInfo)
   mshrMissReqTI.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
   mshrMissReqTI.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
-  io.MissReq_MSHR.valid := ReadMiss_st1 && CoreReq_pipeReg_st0_st1.deq.valid
+  io.MissReq_MSHR.valid := ReadMiss_st1 && CoreReq_pipeReg_st0_st1.deq.valid && !Req_RTAB_st1_valid
   io.MissReq_MSHR.bits.blockAddr := BlockAddr_st1
   io.MissReq_MSHR.bits.targetInfo := mshrMissReqTI.asUInt
   io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
@@ -377,7 +377,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 ).reduce(_ | _)
   io.Probe_SMSHR.bits.Type := 0.U
   // todo add probe type
-  io.Probe_SMSHR.valid := CoreReq_pipeReg_st0_st1.deq.valid 
+  io.Probe_SMSHR.valid := CoreReq_pipeReg_st0_st1.deq.valid && !Req_RTAB_st1_valid
   when(Control_st1.isAMO){
     io.Probe_SMSHR.bits.Type := 3.U
   }.elsewhen(Control_st1.isLR){
