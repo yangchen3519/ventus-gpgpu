@@ -52,11 +52,10 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   val RTABlink_idx = RegInit(VecInit(Seq.fill(NRTABs)(0.U((log2Up(NRTABs)+1).W)))) //highest bit for valid
   val EntryValid = RegInit(VecInit(Seq.fill(NRTABs)(false.B)))
   val ptr = RegInit(0.U(log2Up(NRTABs).W))
-  val ptr_r = RegInit(0.U(log2Up(NRTABs).W))
+  val ptr_r = RegInit(0.U(log2Up(NRTABs).W))// when update and request is for same 
   //val seq_Q = Module(new Queue(UInt(log2Up(NRTABs).W),NRTABs,false,false)) // hold the new ptr idx for pop req
   io.RTAB_full := (EntryValid.reduce(_ & _))
   io.RTAB_almost_full := PopCount(EntryValid) === (NRTABs-1).U
-
   val ptr_w = Wire(UInt(log2Up(NRTABs).W))
   ptr_w := ptr//PriorityEncoder(Reverse(Cat(EntryValid.map(!_))))
   io.RTABpushedIdx := ptr_w
@@ -77,7 +76,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR // st0 request match in RTAB
   val bAMatch_st1 = (Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx) === Cat(io.RTABReq_st1.bits.CoreReqData.tag,io.RTABReq_st1.bits.CoreReqData.setIdx)) &&
     io.RTABReq_st1.valid // st0 request match in st1 request
-  val bAMatchIdx = OHToUInt(Cat(blockAddrMatchInRTAB))
+  val bAMatchIdx = OHToUInt(Reverse(Cat(blockAddrMatchInRTAB)))
 
   io.checkRTABhit := bAMatch_st0 || bAMatch_st1//will ready st0, but not valid st1 <- request will be in RTAB
 
@@ -91,7 +90,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     mshr_idx(ptr_w) := io.RTABReq_st1.bits.mshrIdx
     EntryValid(ptr_w) := true.B
     ptr := ptr_w + 1.U
-  }.elsewhen(io.RTABReq_st1.valid && (bAMatch_st0)){ //st1 request and st0 hit in RTAB entry
+  }.elsewhen(io.RTABReq_st1.valid && (bAMatch_st0) ){ //st1 request and st0 hit in RTAB entry
     //st1
     Req_access(ptr_w) := io.RTABReq_st1.bits.CoreReqData
     Replay_type(ptr_w) := io.RTABReq_st1.bits.ReqType
@@ -125,7 +124,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     Replay_type(ptr_w) := hitRTAB
     wshr_idx(ptr_w) := DontCare
     mshr_idx(ptr_w) := DontCare
-    RTABlink_idx(bAMatchIdx) := Cat(1.U,OHToUInt(bAMatchIdx))
+    RTABlink_idx(bAMatchIdx) := Cat(1.U,ptr_w)
     EntryValid(ptr_w) := true.B
     ptr := ptr_w + 1.U
   }

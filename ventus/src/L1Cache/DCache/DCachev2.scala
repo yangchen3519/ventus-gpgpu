@@ -20,6 +20,7 @@ import firrtl.Utils._
 import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_WordOffsetBits, num_block, num_thread}
 import mmu.SV32.{asidLen, paLen, vaLen}
 import top.parameters.DCACHE_DEBUG
+import scala.tools.nsc.interpreter.Repl
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
   val io = IO(new Bundle{
@@ -178,6 +179,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   MemReqArb.io.in(0).valid := memRspPipe.io.memReq_valid
   MemReqArb.io.in(0).bits := dirtyReplaceMemReq
   memReq_Q.io.enq <> MemReqArb.io.out
+  // todo NOT right!!
   RTAB_pushedIdx_st2.io.enq.valid := MemReqArb.io.out.valid
   RTAB_pushedIdx_st2.io.enq.bits  := ReplayTable.io.RTABpushedIdx
   RTAB_pushedIdx_st2.io.deq.ready := memReq_Q.io.deq.ready

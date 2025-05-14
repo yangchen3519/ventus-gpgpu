@@ -409,6 +409,7 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   val entryMatchProbe = Wire(UInt(NMshrEntry.W))
   val entryMatchProbeBlock = Wire(UInt(NMshrEntry.W))
   val entryStatus = Module(new getEntryStatusReq(NMshrEntry))
+  val probeMatchRsp = Wire(Bool())
   entryStatus.io.valid_list := entry_valid_uint
   val ptr = entryStatus.io.next
   io.missReq.ready := io.stage1_ready
@@ -444,11 +445,12 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   val conditionVec = Wire(Vec(NMshrEntry, Bool()))
   
   for (i <- 0 until NMshrEntry) {
-    conditionVec(i) := entry_valid(i) && (type_Access(i) === 0.U)
+    conditionVec(i) := entry_valid(i) && (type_Access(i) === 0.U) && !(i.asUInt === entryMatchMissRsp && io.missRspIn.valid)
   }
-  io.probeOut_st1.hitblock := entryMatchProbeBlock.orR
+  probeMatchRsp := (OHToUInt(entryMatchProbeBlock ) === entryMatchMissRsp) && io.missRspIn.valid
+  io.probeOut_st1.hitblock := entryMatchProbeBlock.orR && !probeMatchRsp
   io.probeOut_st1.hitblockIdx := OHToUInt(entryMatchProbeBlock)
-  io.probeOut_st1.LRexist := conditionVec.reduce(_||_)
+  io.probeOut_st1.LRexist := conditionVec.reduce(_||_) 
   io.probeOut_st1.a_source := ptr
   io.empty := !entry_valid.reduce(_||_)
   io.full := entry_valid.reduce(_&&_)

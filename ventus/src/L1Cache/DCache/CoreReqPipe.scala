@@ -51,13 +51,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
     //st1
     
-    val tA_Hit_st1       = Input(new hitStatus(NWays, TagBits))
-    val tA_dirtyTag_st1  = Input(UInt(TagBits.W))
-    val tA_dirtyAsid_st1 = if(MMU_ENABLED) {Some(Input(UInt(asidLen.W)))} else None
-    val MSHR_ProbeStatus = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
-    val SMSHR_ProbeStatus = Input(new SMSHRprobeOut(NMshrEntry))
-    val WSHR_CheckResult = Input(new WSHRCheckResult(NWshrEntry))
-    val Mshr_st1_ready   = Input(Bool())
+    val tA_Hit_st1          = Input(new hitStatus(NWays, TagBits))
+    val tA_dirtyTag_st1     = Input(UInt(TagBits.W))
+    val tA_dirtyAsid_st1    = if(MMU_ENABLED) {Some(Input(UInt(asidLen.W)))} else None
+    val MSHR_ProbeStatus    = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
+    val SMSHR_ProbeStatus   = Input(new SMSHRprobeOut(NMshrEntry))
+    val WSHR_CheckResult    = Input(new WSHRCheckResult(NWshrEntry))
+    val Mshr_st1_ready      = Input(Bool())
     val memRsp_coreRsp      = Flipped(DecoupledIO(new CoreRspPipe_st2))
 
     val tagFromCore_tA_st1  = Output(UInt(dcache_TagBits.W))
@@ -267,7 +267,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val UCReqHitDirty  = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isUncached
   io.CacheHit_st1 := CacheHit_st1
   io.WriteHit_st1 := WriteHit_st1
-  missMemReq_valid := (CacheMiss_st1 && !FluInv_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire && !io.Req_st1_RTAB.valid
+  missMemReq_valid := (CacheMiss_st1 && !FluInv_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire && !io.Req_st1_RTAB.valid && io.MSHR_ProbeStatus.probeStatus === 0.U
   // RTABReqType req
   val Req_RTAB_st1_valid = Wire(Bool())
   Req_RTAB_st1_valid := false.B
@@ -449,7 +449,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     // indicating coreRsp is valid from core Req
     // case: regular read/write hit, uncached read hit, uncache write hit undirty, write miss, flush invalidate complete
   st1_valid := false.B
-  when(!Req_RTAB_st1_valid){
+  when(!Req_RTAB_st1_valid ){
     when(Control_st1.isRead && io.tA_Hit_st1.hit){
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     }.elsewhen(Control_st1.isWrite){     
