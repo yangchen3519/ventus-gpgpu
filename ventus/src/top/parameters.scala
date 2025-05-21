@@ -92,8 +92,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   def dcache_MshrSet: Int = 2
   def dcache_MshrWay: Int = 4
 
-  val atuns_NInfWriteEntry: Int = 16
-  val atuns_NResTabEntry: Int = 16
+  def atuns_NInfWriteEntry: Int = 16
+  def atuns_NResTabEntry: Int = 16
 
   def num_sfu = (num_thread >> 2).max(1)
 

@@ -273,7 +273,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   Req_RTAB_st1_valid := false.B
   io.Req_st1_RTAB.valid := Req_RTAB_st1_valid && st1_ready // request RTAB when st1_ready
   ReplayType := 0.U
-  when(Control_st1.isUncached && CacheHitDirty_st1 && Control_st1.isWrite){
+  when(Control_st1.isUncached && CacheHitDirty_st1 && (Control_st1.isWrite || Control_st1.isAMO || Control_st1.isSC)){
     Req_RTAB_st1_valid :=CoreReq_pipeReg_st0_st1.deq.valid && (evictstateReg === evictrsp)
     ReplayType := UCacheHitDirty
   }.elsewhen(MshrStatus === SecondaryFull){
@@ -388,7 +388,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //st1 ready
   st1_ready := false.B
-  when(!Req_RTAB_st1_valid) { // when not request RTAB
+  when(!(Req_RTAB_st1_valid || ReplayType === UCReqHitDirty)) { // when not request RTAB
     when(Control_st1.isRead || Control_st1.isWrite) {
       when(io.tA_Hit_st1.hit) {
           when(CoreRsp_pipeReg_st1_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition

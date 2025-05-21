@@ -216,7 +216,7 @@ if(MMU_ENABLED) {
       way_dirty(choosenDirtySetIdx_st0)(OHToUInt(choosenDirtyWayMask_st0)) := false.B
     }.elsewhen(io.needReplace.get) {
       way_dirty(allocateWrite_st1.setIdx)(OHToUInt(Replacement.io.waymask_st1)) := false.B
-    }.elsewhen(iTagChecker.io.cache_hit && io.probeIsUncache_st1){
+    }.elsewhen(iTagChecker.io.cache_hit && io.probeIsUncache_st1 && probeReadBuf.ready){
       way_dirty(RegNext(io.probeRead.bits.setIdx))(OHToUInt(iTagChecker.io.waymask)) := false.B
     }
   }

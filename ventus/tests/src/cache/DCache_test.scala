@@ -37,7 +37,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
           num_cluster = 2,
           NMshrEntry = 16,
           NSets = 32,
-          NInfWriteEntry = 8
+          NInfWriteEntry = 16
         ),
         control = false,
         mmu = false
@@ -59,7 +59,7 @@ class DCacheWrapperTest extends AnyFreeSpec with ChiselScalatestTester {
       dut.clock.step(5)
 
       
-      val filename = s"ventus/txt/DCache/WWRR_sameadd.txt"
+      val filename = s"ventus/txt/DCache/RAMOR_sameadd.txt"
       val file = scala.io.Source.fromFile(filename)
       val fileLines = file.getLines()
 
