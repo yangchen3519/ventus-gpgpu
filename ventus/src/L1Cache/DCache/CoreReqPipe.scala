@@ -260,6 +260,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val ReadMiss_st1  = !io.tA_Hit_st1.hit && Control_st1.isRead
   val WriteHit_st1  = io.tA_Hit_st1.hit  && Control_st1.isWrite
   val WriteMiss_st1 = !io.tA_Hit_st1.hit && Control_st1.isWrite
+  val AMO_LR_SC_st1 = Control_st1.isAMO || Control_st1.isLR || Control_st1.isSC
   val CacheHit_st1 = io.tA_Hit_st1.hit
   val CacheMiss_st1 = !io.tA_Hit_st1.hit
   val CacheHitDirty_st1 = io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty
@@ -285,7 +286,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }.elsewhen(Control_st1.isRead && io.WSHR_CheckResult.Hit){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := readHitWSHR
-  }.elsewhen(WriteMiss_st1 && (MshrStatus === SecondaryAvail || MshrStatus === SecondaryFull)){
+  }.elsewhen((WriteMiss_st1 || AMO_LR_SC_st1) && (MshrStatus === SecondaryAvail || MshrStatus === SecondaryFull)){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := writeMissHitMSHR
   }.elsewhen(WriteMiss_st1 && io.WSHR_CheckResult.Hit){
