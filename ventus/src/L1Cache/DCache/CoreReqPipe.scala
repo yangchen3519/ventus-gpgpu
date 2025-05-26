@@ -314,6 +314,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   missMemReq_st1.a_data := addrGen.io.dataOut
   missMemReq_st1.hasCoreRsp := Control_st1.isWrite
   missMemReq_st1.coreRspInstrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
+  missMemReq_st1.spike_info.foreach( left =>
+    left := CoreReq_pipeReg_st0_st1.deq.bits.Req.spike_info.getOrElse(0.U)
+  )
   when(Control_st1.isRead){
     missMemReq_st1.a_source := Cat("d1".U, io.MSHR_ProbeStatus.a_source, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
   }.elsewhen(Control_st1.isLR || Control_st1.isSC || Control_st1.isAMO){
@@ -338,6 +341,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   FluInvMemReq_st1.coreRspInstrId := DontCare
   FluInvMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
   FluInvMemReq_valid := (FluInvIsPut_st1 || FluInvIsFluL2_st1) && CoreReq_pipeReg_st0_st1.deq.valid
+  FluInvMemReq_st1.spike_info.foreach(_ := DontCare )
   // uncache hit dirty cacheline evict request
   evictMemReq_st1.a_opcode := TLAOp_PutFull
   evictMemReq_st1.a_param  := 0.U
@@ -346,6 +350,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   evictMemReq_st1.hasCoreRsp := false.B
   evictMemReq_st1.a_source := DontCare
   evictMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  evictMemReq_st1.spike_info.foreach(_ := DontCare )
   evictstateReg := evictReg_next
   evictMemReq_st1.coreRspInstrId := DontCare
   evictReg_next := evictstateReg

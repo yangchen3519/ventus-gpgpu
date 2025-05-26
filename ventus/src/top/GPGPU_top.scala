@@ -17,6 +17,7 @@ import parameters._
 import L1Cache.ICache._
 import L1Cache._
 import L1Cache.DCache._
+import L1Cache.AtomicUnit._
 import L1Cache.ShareMem._
 import config.config._
 import pipeline._
@@ -163,6 +164,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val sm2clusterArb = VecInit(Seq.fill(NCluster)(Module(new SM2clusterArbiter(l2cache_params_l)).io))
   val l2distribute = VecInit(Seq.fill(NCluster)(Module(new l2Distribute(l2cache_params_l)).io))
   val cluster2l2Arb = VecInit(Seq.fill(NL2Cache)(Module(new cluster2L2Arbiter(l2cache_params_l,l2cache_params)).io))
+  val atomicunit = VecInit(Seq.fill(NL2Cache)( Module(new AtomicUnit(l2cache_params)).io))
  // val sm2L2Arb = Module(new SM2L2Arbiter(l2cache_params))
 
   for (i<- 0 until NCluster) {
@@ -195,8 +197,14 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   MMU_ENABLED match {
     case false => {
       for(i <- 0 until NL2Cache){
-        l2cache(i).in_a <> cluster2l2Arb(i).memReqOut
-        cluster2l2Arb(i).memRspIn <> l2cache(i).in_d
+        atomicunit(i).L12ATUmemReq.bits := cluster2l2Arb(i).memReqOut.bits
+        atomicunit(i).L12ATUmemReq.valid := cluster2l2Arb(i).memReqOut.valid
+        cluster2l2Arb(i).memReqOut.ready := atomicunit(i).L12ATUmemReq.ready
+        l2cache(i).in_a <> atomicunit(i).ATU2L2memReq
+        cluster2l2Arb(i).memRspIn <> atomicunit(i).ATU2L1memRsp
+        atomicunit(i).L22ATUmemRsp.bits := l2cache(i).in_d.bits
+        atomicunit(i).L22ATUmemRsp.valid := l2cache(i).in_d.valid
+        l2cache(i).in_d.ready := atomicunit(i).L22ATUmemRsp.ready
 
         for(j <- 0 until NCluster){
           cluster2l2Arb(i).memReqVecIn(j) <> l2distribute(j).memReqVecOut(i)
@@ -399,13 +407,14 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   icache.io.externalFlushPipe.bits.warpid :=pipe.io.externalFlushPipe.bits
   icache.io.externalFlushPipe.valid :=pipe.io.externalFlushPipe.valid
 
-  val dcache = Module(new DataCache(SV)(param))
+  val dcache = Module(new DataCachev2(SV)(param))
   // **** dcache memRsp ****
   dcache.io.memRsp.valid := l1Cache2L2Arb.io.memRspVecOut(1).valid
   dcache.io.memRsp.bits.d_source := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_source
   dcache.io.memRsp.bits.d_addr := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_addr
   dcache.io.memRsp.bits.d_data := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_data
   dcache.io.memRsp.bits.d_opcode := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_opcode
+  dcache.io.memRsp.bits.d_param := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_param
   l1Cache2L2Arb.io.memRspVecOut(1).ready := dcache.io.memRsp.ready
   // ***********************
   // **** dcache memReq ****
@@ -528,6 +537,7 @@ class SM2clusterArbiter(L2param: InclusiveCacheParameters_lite)(implicit p: Para
     io.memRspVecOut(i).bits.d_source:=io.memRspIn.bits.source
     io.memRspVecOut(i).bits.d_addr:=io.memRspIn.bits.address
     io.memRspVecOut(i).bits.d_opcode:= io.memRspIn.bits.opcode
+    io.memRspVecOut(i).bits.d_param:= io.memRspIn.bits.param
     if(NSmInCluster == 1){
       io.memRspVecOut(i).valid := io.memRspIn.valid
     } else if(NSmInCluster == 2){

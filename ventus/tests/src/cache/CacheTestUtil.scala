@@ -146,13 +146,7 @@ class L2CacheUtillite(params: InclusiveCacheParameters_lite)(implicit p: Paramet
     val currentData = rom.read(writeAddr)
     
     // Apply mask and write new data
-    // 将16位掩码扩展到128位，每个掩码位控制8位数据
-    val expandedMask = Wire(Vec(16, UInt(8.W)))
-    for (i <- 0 until 16) {
-      expandedMask(i) := Mux(writeMask(i).asBool, 0xFF.U(8.W), 0.U(8.W))
-    }
-    val finalMask = expandedMask.asUInt
-    val newData = (currentData & ~finalMask) | (writeData.asUInt & finalMask)
+    val newData = (currentData & ~writeMask.asUInt) | (writeData.asUInt & writeMask.asUInt)
     rom.write(writeAddr, newData)
   }
 

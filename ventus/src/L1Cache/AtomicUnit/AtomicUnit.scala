@@ -297,21 +297,21 @@ class AtomicUnit (params_in : InclusiveCacheParameters_lite)(implicit p: Paramet
       }.otherwise{
         nextState := idle
       }
+      atomicReqValid      := isAtomicRequest(io.L12ATUmemReq.bits) && io.L12ATUmemReq.valid
+      atomicReq.a_addr    := io.L12ATUmemReq.bits.address
+      atomicReq.a_mask    := io.L12ATUmemReq.bits.mask.asTypeOf(Vec(dcache_BlockWords, UInt(BytesOfWord.W)))
+      atomicReq.a_data    := atomicDataInMask.io.dout
+      atomicReq.a_opcode  := io.L12ATUmemReq.bits.opcode
+      atomicReq.a_param   := io.L12ATUmemReq.bits.param
+      atomicL2Req.opcode  := TLAOp_Get
+      atomicL2Req.address := io.L12ATUmemReq.bits.address
+      atomicL2Req.mask    := io.L12ATUmemReq.bits.mask
+      atomicL2Req.param   := 0.U
+      atomicL2Req.data    := DontCare
+      atomicL2Req.source  := Cat("b11".U,0.U(InfWriteEntryBits.W),io.L12ATUmemReq.bits.source)
+      atomicL2Req.source  := Cat("b11".U,0.U(InfWriteEntryBits.W),io.L12ATUmemReq.bits.source)   
       when(nextState === issueGet){ 
-       memRspAtomicReady := true.B
-        atomicReqValid      := true.B
-        atomicReq.a_addr    := io.L12ATUmemReq.bits.address
-        atomicReq.a_mask    := io.L12ATUmemReq.bits.mask.asTypeOf(Vec(dcache_BlockWords, UInt(BytesOfWord.W)))
-        atomicReq.a_data    := atomicDataInMask.io.dout
-        atomicReq.a_opcode  := io.L12ATUmemReq.bits.opcode
-        atomicReq.a_param   := io.L12ATUmemReq.bits.param
-        atomicL2Req.opcode  := TLAOp_Get
-        atomicL2Req.address := io.L12ATUmemReq.bits.address
-        atomicL2Req.mask    := io.L12ATUmemReq.bits.mask
-        atomicL2Req.param   := 0.U
-        atomicL2Req.data    := DontCare
-        atomicL2Req.source  := Cat("b11".U,0.U(InfWriteEntryBits.W),io.L12ATUmemReq.bits.source)
-        atomicL2Req.source  := Cat("b11".U,0.U(InfWriteEntryBits.W),io.L12ATUmemReq.bits.source)       
+       memRspAtomicReady := true.B           
       }
     }
     is(issueGet){
@@ -321,21 +321,23 @@ class AtomicUnit (params_in : InclusiveCacheParameters_lite)(implicit p: Paramet
       nextState := issueGet
     }
     memRspAtomicReady := io.ATU2L1memRsp.ready
-    when(nextState === issuePut){
-      atomicRspValid := true.B
-      atomicL1Rsp.opcode  := 1.U
-      atomicL1Rsp.data    := io.L22ATUmemRsp.bits.data
-      atomicL1Rsp.source  := io.L22ATUmemRsp.bits.source.tail(2+InfWriteEntryBits)
-      atomicL1Rsp.param   := 2.U //indicate atomic Rsp
+    
+    atomicReqValid := io.L22ATUmemRsp.valid && (isAtomicResponse(io.L22ATUmemRsp.bits))
+    atomicL1Rsp.opcode  := 1.U
+    atomicL1Rsp.data    := io.L22ATUmemRsp.bits.data
+    atomicL1Rsp.source  := io.L22ATUmemRsp.bits.source.tail(2+InfWriteEntryBits)
+    atomicL1Rsp.param   := 2.U //indicate atomic Rsp
 
-      atomicReqValid := true.B
-      atomicL2Req.opcode  := TLAOp_PutPart
-      atomicL2Req.address := atomicReq.a_addr
-      atomicL2Req.mask    := atomicReq.a_mask.asUInt
-      atomicL2Req.param   := 0.U
-      atomicL2Req.data    := atomicOpResultDataPut
-      atomicL2Req.source  := io.L22ATUmemRsp.bits.source
-  }
+    atomicL2Req.opcode  := TLAOp_PutPart
+    atomicL2Req.address := atomicReq.a_addr
+    atomicL2Req.mask    := atomicReq.a_mask.asUInt
+    atomicL2Req.param   := 0.U
+    atomicL2Req.data    := atomicOpResultDataPut
+    atomicL2Req.source  := io.L22ATUmemRsp.bits.source
+    atomicRspValid := io.L22ATUmemRsp.valid && (isAtomicResponse(io.L22ATUmemRsp.bits)) && io.ATU2L2memReq.ready
+  //  when(nextState === issuePut){
+  //    atomicRspValid := true.B
+  //}
 }
   is(issuePut){
     when(io.L22ATUmemRsp.valid && (isAtomicResponse(io.L22ATUmemRsp.bits))){

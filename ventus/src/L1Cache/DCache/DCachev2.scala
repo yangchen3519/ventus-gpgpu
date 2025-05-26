@@ -73,7 +73,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // source: RTAB top request / core request from io
   CoreReqArb.io.in(0) <> ReplayTable.io.coreReq_replay
   CoreReqArb.io.in(1) <> io.coreReq
-  io.coreReq.ready := CoreReqArb.io.in(0).ready && !ReplayTable.io.RTAB_full
+  io.coreReq.ready := CoreReqArb.io.in(1).ready && !ReplayTable.io.RTAB_full
   //---------coreReqPipe input connection------------
   // st0
   coreReqPipe.io.CoreReq                <> CoreReqArb.io.out
