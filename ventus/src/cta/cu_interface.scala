@@ -29,6 +29,7 @@ class cu_interface extends Module {
   val NUM_SGPR = CONFIG.WG.NUM_SGPR_MAX
   val NUM_VGPR = CONFIG.WG.NUM_VGPR_MAX
   val NUM_PDS  = CONFIG.WG.NUM_PDS_MAX
+  val MEM_ADDR_WIDTH = CONFIG.GPU.MEM_ADDR_WIDTH
   val DEBUG = CONFIG.DEBUG
   class wftag_datatype extends Bundle {
     val wg_slot_id = UInt(log2Ceil(NUM_WG_SLOT).W)
@@ -71,7 +72,7 @@ class cu_interface extends Module {
   val splitter_lds_addr = WireInit(fifo.io.deq.bits.lds_base)
   val splitter_sgpr_addr = Reg(UInt(log2Ceil(NUM_SGPR).W)) // sgpr base of WF, its value steps num_sgpr_per_wf every time
   val splitter_vgpr_addr = Reg(UInt(log2Ceil(NUM_VGPR).W)) // vgpr base of WF, its value steps num_vgpr_per_wf every time
-  val splitter_pds_addr  = Reg(UInt(log2Ceil(NUM_PDS ).W)) // pds  base of WF, its value steps num_pds_per_wf  every time
+  val splitter_pds_addr = Reg(UInt(MEM_ADDR_WIDTH))        // pds  base of WF, its value steps num_pds_per_wf every time
   val splitter_load_new = (splitter_cnt === 0.U) && fifo.io.deq.valid   // A new WG will be loaded to splitter
   fifo.io.deq.ready := (splitter_cnt === 1.U) && io.cu_wf_new(fifo.io.deq.bits.cu_id).ready
 

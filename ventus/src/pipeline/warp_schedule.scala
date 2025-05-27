@@ -108,14 +108,16 @@ class warp_scheduler extends Module{
   val warp_endprg_mask_0 = WireInit(VecInit(Seq.fill(num_block)(false.B)))
   //val warp_bar_cur_next=warp_bar_cur
   //val warp_bar_exp_next=warp_bar_exp
+  val WF_ID_WIDTH = log2Ceil(num_warp_in_a_block)
   val warp_bar_lock=WireInit(VecInit(Seq.fill(num_block)(false.B))) //equals to "active block"
-  val new_wg_id=io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH-1,WF_COUNT_WIDTH_PER_WG)
-  val new_wf_id=io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(WF_COUNT_WIDTH_PER_WG-1,0)
+  val new_wg_id=io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH-1, WF_ID_WIDTH)
+  val new_wf_id=io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(WF_ID_WIDTH-1,0)
   val new_wg_wf_count=io.warpReq.bits.CTAdata.dispatch2cu_wg_wf_count
-  val end_wg_id=io.wg_id_tag(TAG_WIDTH-1,WF_COUNT_WIDTH_PER_WG)
-  val end_wf_id=io.wg_id_tag(WF_COUNT_WIDTH_PER_WG-1,0)
+  val end_wg_id=io.wg_id_tag(TAG_WIDTH-1, WF_ID_WIDTH)
+  val end_wf_id=io.wg_id_tag(WF_ID_WIDTH-1, 0)
   val warp_bar_data=RegInit(0.U(num_warp.W))  // 0 means not locked by barrier
   val warp_bar_belong=RegInit(VecInit(Seq.fill(num_block)(0.U(num_warp.W))))
+
 
   when(io.warpReq.fire){
     warp_bar_belong(new_wg_id):=warp_bar_belong(new_wg_id) | (1.U<<io.warpReq.bits.wid).asUInt  //显示warp中有哪些属于wg

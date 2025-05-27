@@ -176,13 +176,15 @@ class pipe(val sm_id: Int = 0) extends Module{
   }
   ibuffer.io.flush_wid:=warp_sche.io.flush
 
-  (control.io.control zip control.io.control_mask).foreach{ case (ctrl, mask) =>
-    when(ctrl.alu_fn === 63.U & ibuffer.io.in.valid & mask) {
-      printf(p"sm ${sm_id} warp ${Decimal(ctrl.wid)} ")
-      printf(p"undefined @ 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}\n")
-    }
-    assert (!(ctrl.alu_fn === 63.U & ibuffer.io.in.valid & mask), s"undefined instruction")
-  }
+  // 进入ibuffer的指令不一定会被实际发射执行，这里不应检测undefined instruction
+  // 例如，指令段之后的一些无用数据也可能进入ibuffer，但实际上因跳转/endprg而不会发射
+  // (control.io.control zip control.io.control_mask).foreach{ case (ctrl, mask) =>
+  //   when(ctrl.alu_fn === 63.U & ibuffer.io.in.valid & mask) {
+  //     printf(p"sm ${sm_id} warp ${Decimal(ctrl.wid)} ")
+  //     printf(p"undefined @ 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}\n")
+  //   }
+  //   assert (!(ctrl.alu_fn === 63.U & ibuffer.io.in.valid & mask), s"undefined instruction")
+  // }
 
 
 
@@ -253,6 +255,19 @@ class pipe(val sm_id: Int = 0) extends Module{
   scoreb(wb.io.out_x.bits.warp_id).wb_x_fire:=wb.io.out_x.fire
   scoreb(wb.io.out_v.bits.warp_id).wb_v_fire:=wb.io.out_v.fire
 
+  // ibuffer2issue模块的IO都是实际发射但尚未执行的指令，在这检查undefined instruction
+  when(ibuffer2issue.io.out_x.fire){
+    val ctrl = ibuffer2issue.io.out_x.bits
+    assert(ctrl.alu_fn =/= 63.U, 
+           s"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
+           s"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
+  }
+  when(ibuffer2issue.io.out_v.fire){
+    val ctrl = ibuffer2issue.io.out_v.bits
+    assert(ctrl.alu_fn =/= 63.U, 
+           s"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
+           s"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
+  }
 
   operand_collector.io.controlV<>ibuffer2issue.io.out_v//ibuffer2issue.io.out.bits
   operand_collector.io.controlX<>ibuffer2issue.io.out_x//ibuffer2issue.io.out.bits
