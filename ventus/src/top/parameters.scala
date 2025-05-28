@@ -73,7 +73,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def dcache_NWays: Int = 2
 
-  def dcache_BlockWords: Int = 4  // number of words per cacheline(block)
+  def dcache_BlockWords: Int = 8  // number of words per cacheline(block)
   def dcache_wshr_entry: Int = 4
 
   def dcache_SetIdxBits: Int = log2Ceil(dcache_NSets)

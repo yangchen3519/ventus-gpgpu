@@ -527,7 +527,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreRsp_st3.io.enq.bits.data    := DataCoreOrder_st2
   CoreRsp_st3.io.enq.bits.instrId := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.instrId, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.instrId)
   CoreRsp_st3.io.enq.bits.isWrite := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.isWrite, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.isWrite)
-  CoreRsp_st3.io.enq.bits.activeMask := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.activeMask, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask)
+  CoreRsp_st3.io.enq.bits.activeMask :=  CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask
   //
   io.CoreRsp <> CoreRsp_st3.io.deq
   io.st2_ready := CoreRsp_st3.io.enq.ready
