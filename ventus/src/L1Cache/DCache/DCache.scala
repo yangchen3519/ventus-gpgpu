@@ -888,7 +888,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   when(memReqIsWrite_st3 && memReq_Q.io.deq.fire){
     memReq_st3.a_source := Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)
     //memReq_st3.a_source := Cat("d0".U, 0.U((log2Up(NMshrEntry)-log2Up(NWshrEntry)).W), WshrAccess.io.pushedIdx, coreReq_st1.setIdx)
-  }.elsewhen(memReqIsRead_st3 && memReq_Q.io.deq.valid){
+  }.elsewhen(memReqIsRead_st3 && memReq_Q.io.deq.fire){
     memReq_st3.a_source := memReq_Q.io.deq.bits.a_source
   }
   val coreRspFromMemReqMask_st1 = coreReq_st1.perLaneAddr.map(_.activeMask)
