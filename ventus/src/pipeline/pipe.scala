@@ -259,14 +259,14 @@ class pipe(val sm_id: Int = 0) extends Module{
   when(ibuffer2issue.io.out_x.fire){
     val ctrl = ibuffer2issue.io.out_x.bits
     assert(ctrl.alu_fn =/= 63.U, 
-           s"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
-           s"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
+           p"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
+           p"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
   }
   when(ibuffer2issue.io.out_v.fire){
     val ctrl = ibuffer2issue.io.out_v.bits
     assert(ctrl.alu_fn =/= 63.U, 
-           s"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
-           s"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
+           p"UNDEFINED INSTRUCTION @ SM ${sm_id} warp ${Decimal(ctrl.wid)} " + 
+           p"PC 0x${Hexadecimal(ctrl.pc)}: 0x${Hexadecimal(ctrl.inst)}")
   }
 
   operand_collector.io.controlV<>ibuffer2issue.io.out_v//ibuffer2issue.io.out.bits

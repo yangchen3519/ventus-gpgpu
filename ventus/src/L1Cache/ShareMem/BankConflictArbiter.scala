@@ -109,6 +109,7 @@ class BankConflictArbiter(implicit p: Parameters) extends ShareMemModule{
     val activeLane = Output(Vec(NLanes,Bool()))
 
     val bankConflict = Output(Bool())
+    val bankConflict_isWrite = Output(Bool())
   })
   //announcement
   val bankConflict = Wire(Bool())
@@ -186,6 +187,7 @@ class BankConflictArbiter(implicit p: Parameters) extends ShareMemModule{
   //**************output to DataArray**************
   io.dataArrayEn := perBankActiveLaneWhenConflict1H.map(_.orR)
   io.bankConflict := bankConflict//to pull down coreReq.ready
+  io.bankConflict_isWrite := isWrite
 
   //**************output to coreRsp****************
   io.activeLane := ActiveLaneWhenConflict1H

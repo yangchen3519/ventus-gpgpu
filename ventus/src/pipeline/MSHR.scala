@@ -76,7 +76,8 @@ class MSHRv2 extends Module{
           //Cat(io.from_addr.bits.tag.warp_id, io.from_addr.bits.tag.reg_idxw, io.from_addr.bits.tag.mask.asUInt)
           io.from_addr.bits.tag.asUInt
         )
-        data.write(valid_entry, VecInit(Seq.fill(num_thread)(0.U)))    // data initialize
+        // 数据存储应当不需要初始化，对应mask初始化即可。这里无mask的写端口似乎会使得上边有mask的写端口的mask也消失，故移除
+        // data.write(valid_entry, VecInit(Seq.fill(num_thread)(0.U)), VecInit.fill(num_thread)(true.B))    // data initialize
         currentMask(valid_entry) := io.from_addr.bits.tag.mask.asUInt   // mask initialize
       }
     }
@@ -86,7 +87,7 @@ class MSHRv2 extends Module{
         //Cat(reg_req.warp_id, reg_req.reg_idxw, reg_req.mask.asUInt)
         reg_req.asUInt
       )
-      data.write(valid_entry, VecInit(Seq.fill(num_thread)(0.U)))
+      // data.write(valid_entry, VecInit(Seq.fill(num_thread)(0.U)), VecInit.fill(num_thread)(true.B))    // data initialize
       currentMask(valid_entry) := reg_req.mask.asUInt
     }
     is(s_out){ // release MSHR line

@@ -15,6 +15,12 @@ import SRAMTemplate.SRAMTemplate
 import chisel3._
 import chisel3.util._
 import config.config.Parameters
+import top.parameters.sharedmem_BlockWords
+import top.parameters.xLen
+import top.parameters.sharedmem_depth
+import top.parameters.num_thread
+import top.parameters.BytesOfWord
+import top.parameters.num_lane
 
 /*Version Note
 * DCacheCoreReq spec changed, shift some work to LSU
@@ -69,7 +75,7 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   val coreRsp_QAlmstFull = Wire(Bool())
 
   // ******      Arbiter      ******
-  val coreReq_st1 = RegEnable(io.coreReq.bits, io.coreReq.ready)
+  val coreReq_st1 = RegEnable(io.coreReq.bits, io.coreReq.fire)
   BankConfArb.io.coreReqArb.enable := io.coreReq.fire
   BankConfArb.io.coreReqArb.isWrite := Mux(RegNext(BankConfArb.io.bankConflict),coreReq_st1.isWrite,io.coreReq.bits.isWrite)
   BankConfArb.io.coreReqArb.perLaneAddr := io.coreReq.bits.perLaneAddr
@@ -114,8 +120,11 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   // ******     pipeline regs      ******
   val coreReqisValidWrite_st1 = RegInit(false.B)
   coreReqisValidWrite_st1 := (io.coreReq.fire && io.coreReq.bits.isWrite) || (coreReqisValidWrite_st1 && RegNext(BankConfArb.io.bankConflict))
+  val coreReqisValidRead_comb = (io.coreReq.fire && !io.coreReq.bits.isWrite) || RegNext(BankConfArb.io.bankConflict && !BankConfArb.io.bankConflict_isWrite, false.B)
   val coreReqisValidRead_st1  = RegInit(false.B)
   coreReqisValidRead_st1 := (io.coreReq.fire && !io.coreReq.bits.isWrite) || (coreReqisValidRead_st1 && RegNext(BankConfArb.io.bankConflict))//这个信号不是给Data Array用的哈
+  // 新增的coreReqisValidRead_comb应当与原_st1只差一个RegNext，验证一下
+  assert(RegNext(coreReqisValidRead_comb, false.B) === coreReqisValidRead_st1)
   val coreReqisValidRead_st2 = RegNext(coreReqisValidRead_st1)//TODO verification for bank conflict
   val coreReqisValidWrite_st2 = RegNext(coreReqisValidWrite_st1)
 
@@ -132,6 +141,7 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   //值得注意的是，当读写请求同时来临时，如果读写地址相同，读不应该直接传递写的内容，而是返回旧的内容
   //这是因为流水线设计里，读请求类型中访问Data array比写类型请求滞后一个流水级
   //因此读写请求同时发生的话，读请求肯定比写请求早一个周期进入cache
+  //// Note: 上述注释似乎写反了，从代码中看是读请求比写请求提前一个流水级，因此读写同地址时应当返回写入新数据
   val DataAccessesRRsp = (0 until NBanks).map {i =>
     val DataAccess = Module(new SRAMTemplate(
       gen=UInt(8.W),
@@ -139,9 +149,10 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
       way=BytesOfWord,
       shouldReset = false,
       holdRead = false,
-      singlePort = false
+      singlePort = false,
+      bypassWrite = true
     ))
-    DataAccess.io.w.req.valid := coreReqisValidWrite_st1
+    DataAccess.io.w.req.valid := coreReqisValidWrite_st1 && RegNext(BankConfArb.io.dataArrayEn(i), false.B)
     DataAccess.io.w.req.bits.data := DataCorssBarForWrite.io.DataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
     //this setIdx = setIdx + wayIdx + bankOffset
     if(BlockOffsetBits-BankIdxBits>0) {
@@ -152,12 +163,12 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
     DataAccess.io.w.req.bits.waymask.foreach(_ :=
       arbAddrCrsbarOut_st1(i).wordOffset1H)
 
-    DataAccess.io.r.req.valid := io.coreReq.fire && !io.coreReq.bits.isWrite
+    DataAccess.io.r.req.valid := coreReqisValidRead_comb && BankConfArb.io.dataArrayEn(i)
     if(BlockOffsetBits-BankIdxBits>0)
       DataAccess.io.r.req.bits.setIdx := Cat(
-      io.coreReq.bits.setIdx,//setIdx
+      Mux(io.coreReq.fire, io.coreReq.bits.setIdx, coreReq_st1.setIdx),//setIdx
       BankConfArb.io.addrCrsbarOut(i).bankOffset.getOrElse(false.B))//bankOffset
-    else DataAccess.io.r.req.bits.setIdx := io.coreReq.bits.setIdx
+    else DataAccess.io.r.req.bits.setIdx := Mux(io.coreReq.fire, io.coreReq.bits.setIdx, coreReq_st1.setIdx)
     Cat(DataAccess.io.r.resp.data.reverse)
   }
   val dataAccess_data_st2 = RegEnable(VecInit(DataAccessesRRsp),coreReqisValidRead_st1)

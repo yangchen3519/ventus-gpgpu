@@ -5,6 +5,8 @@ import chisel3.util._
 
 object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, not the last idx.
   def num_sm = 2
+  var num_warp = 8
+  var num_thread = 32
   val SINGLE_INST: Boolean = false
   val SPIKE_OUTPUT: Boolean = true
   val INST_CNT: Boolean = true
@@ -14,14 +16,12 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   val wid_to_check = 2
   def num_bank = 4                  // # of banks for register file
   def num_collectorUnit = num_warp
-  def num_vgpr:Int = 4096
-  def num_sgpr:Int = 4096
+  def num_vgpr:Int = 256*num_warp
+  def num_sgpr:Int = 256*num_warp
   def depth_regBank = log2Ceil(num_vgpr/num_bank)
   def regidx_width = 5
 
   def regext_width = 3
-
-  var num_warp = 8
 
   def num_cluster = 1
 
@@ -31,8 +31,6 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   // for register file bank access only, in operand collector
   // Calculate the highest slice index, ensuring it does not exceed the actual width of 'wid'
   def widSliceHigh = scala.math.min(log2Ceil(num_bank) - 1, depth_warp - 1)
-
-  var num_thread = 8
 
   def depth_thread = log2Ceil(num_thread)
 
@@ -181,7 +179,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_LDS_MAX = sharemem_size              // Max number of LDS  occupied by a workgroup
       val NUM_SGPR_MAX = num_sgpr                  // Max number of sgpr occupied by a workgroup
       val NUM_VGPR_MAX = num_vgpr                  // Max number of vgpr occupied by a workgroup
-      val NUM_PDS_MAX = 1024*num_thread*2          // Max number of PDS  occupied by a *wavefront*
+      val NUM_PDS_MAX = 4096*num_thread            // Max number of PDS  occupied by a *wavefront*
       //val NUM_GDS_MAX = 1024                     // Max number of GDS  occupied by a workgroup, useless
 
       // WF tag = cat(wg_slot_id_in_cu, wf_id_in_wg)
