@@ -210,10 +210,14 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val inflightReadWriteMiss = RegInit(false.B)
   val inflightreadwritemiss_w = (coreReqControl_st0_noen.isWrite && MshrAccess.io.mshrStatus_st0 =/= 0.U) || inflightReadWriteMiss
   // ******     pipeline regs      ******
-  coreReq_Q.io.enq.valid := io.coreReq.valid && !probereadAllocateWriteConflict && TagAccess.io.probeRead.ready  && (MshrAccess.io.mshrStatus_st0 =/= 3.U) && (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty))
-  val coreReq_st0_ready =  coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w && !readmiss_sameadd && TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U)
+  coreReq_Q.io.enq.valid := io.coreReq.valid && !probereadAllocateWriteConflict && TagAccess.io.probeRead.ready  && (MshrAccess.io.mshrStatus_st0 =/= 3.U) && (MshrAccess.io.mshrStatus_st0 =/= 1.U) && 
+                            !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty)) && !MshrAccess.io.releasing_stall   
+  // coreReq_st0_ready 信号用来使能本次的 CoreReq 请求是否用于探测MSHR                            
+  // 这里 MshrAccess.io.releasing_stall 其实可以不用考虑，这里只是为了和原来版本对齐
+  // 假如没加 MshrAccess.io.releasing_stall 信号，mshrStatus_st0 会返回清楚 MSHR entry 的中间信号，但是因为 coreReq.ready 信号已经与上了 releasing_stall 信号，所以不会出现错误 
+  val coreReq_st0_ready =  coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w && !readmiss_sameadd && TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !MshrAccess.io.releasing_stall
   io.coreReq.ready := coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w &&  !readmiss_sameadd &&
-    TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty))
+    TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty)) && !MshrAccess.io.releasing_stall
   coreReq_Q.io.enq.bits := io.coreReq.bits
 
   val coreReq_st1 = coreReq_Q.io.deq.bits
@@ -261,6 +265,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   TagAccess.io.probeRead.valid := (io.coreReq.fire || injectTagProbe) && !(coreReqControl_st0.isFlush || coreReqControl_st0.isInvalidate)
   TagAccess.io.probeRead.bits.setIdx := Mux(injectTagProbe,coreReq_st1.setIdx,io.coreReq.bits.setIdx)
   TagAccess.io.tagFromCore_st1 := coreReq_st1.tag
+  TagAccess.io.perLaneAddr_st1 := coreReq_st1.perLaneAddr
   if(MMU_ENABLED) {
     TagAccess.io.asidFromCore_st1.get := coreReq_st1.asid.get
   }
@@ -411,7 +416,8 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   DataAccessReadHitSRAMRReq.foreach(_.setIdx := Cat(coreReq_st1.setIdx,OHToUInt(TagAccess.io.waymaskHit_st1)))
 
   val waitforL2flush_st2 = RegInit(false.B)
-  val flushstall = coreReqControl_st0_noen.isFlush || coreReqControl_st0_noen.isInvalidate || waitforL2flush
+  // val flushstall = coreReqControl_st0_noen.isFlush || coreReqControl_st0_noen.isInvalidate || waitforL2flush
+  val flushstall = waitforL2flush
   //todo cannot handle when there still exist inflight L2 rsp
 
   when(io.coreReq.fire && (coreReqControl_st0_noen.isInvalidate || coreReqControl_st0_noen.isFlush)){
@@ -483,7 +489,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
 
   val InvOrFluMemReq = Wire(new WshrMemReq)
   val L2flush = Wire(new WshrMemReq)
-  InvOrFluMemReq.a_opcode := Mux(invalidatenodirty,L2flush.a_opcode, TLAOp_PutFull)//PutFullData:Get
+  InvOrFluMemReq.a_opcode := Mux(invalidatenodirty,L2flush.a_opcode, TLAOp_PutPart)//PutFullData:Get
   InvOrFluMemReq.a_param := Mux(invalidatenodirty,L2flush.a_param,0.U) //regular write
   InvOrFluMemReq.a_source := DontCare //wait for WSHR
   InvOrFluMemReq.a_addr.get := Cat(TagAccess.io.dirtyTag_st1.get,
@@ -491,7 +497,8 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   if(MMU_ENABLED){
     InvOrFluMemReq.Asid.get := TagAccess.io.dirtyASID_st1.get
   }
-  InvOrFluMemReq.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  // InvOrFluMemReq.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  InvOrFluMemReq.a_mask := TagAccess.io.dirtyMask_st1.asTypeOf(InvOrFluMemReq.a_mask)
   //InvOrFluMemReq.a_data :=
   InvOrFluMemReq.hasCoreRsp := waitforL2flush_st2
   InvOrFluMemReq.coreRspInstrId := coreReq_st1.instrId
@@ -587,14 +594,15 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
 
   //为了data SRAM的读出周期，这个寄存器搭配dirtyReplace_st2使用
   val dirtyReplace_st1 = Wire(new WshrMemReq)
-  dirtyReplace_st1.a_opcode := 0.U//PutFullData
+  dirtyReplace_st1.a_opcode := 1.U//PutPartialData
   dirtyReplace_st1.a_param := 0.U//regular write
   dirtyReplace_st1.a_source := DontCare//wait for WSHR in next next cycle
   dirtyReplace_st1.a_addr.get := RegNext(TagAccess.io.a_addrReplacement_st1.get)
   if(MMU_ENABLED){
     dirtyReplace_st1.Asid.get := RegNext(TagAccess.io.asidReplacement_st1.get)
   }
-  dirtyReplace_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  // dirtyReplace_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  dirtyReplace_st1.a_mask := RegNext(TagAccess.io.replace_dirty_mask_st1.asTypeOf(dirtyReplace_st1.a_mask))
   dirtyReplace_st1.a_data := DontCare//wait for data SRAM in next cycle
   dirtyReplace_st1.hasCoreRsp := false.B
   dirtyReplace_st1.coreRspInstrId := DontCare

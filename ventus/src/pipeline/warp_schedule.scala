@@ -146,7 +146,7 @@ class warp_scheduler extends Module{
     warp_wg_valid(new_wg_id):=true.B
   }
   when(io.warpRsp.fire){
-    warp_endprg_cnt(new_wg_id) := warp_endprg_cnt(end_wg_id) & (~(1.U<<io.warpRsp.bits.wid)).asUInt
+    warp_endprg_cnt(end_wg_id) := warp_endprg_cnt(end_wg_id) & (~(1.U<<io.warpRsp.bits.wid)).asUInt
   }
   for(i<-0 until num_block){
     warp_endprg_mask_0(i) := (warp_endprg_cnt(i).orR === false.B) && warp_wg_valid(i)

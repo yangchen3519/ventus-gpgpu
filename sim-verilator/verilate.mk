@@ -134,7 +134,7 @@ default: lib
 $(VLIB_SRC_V): $(VLIB_SRC_SCALA)
 	cd .. && ./mill ventus[6.4.0].runMain top.emitVerilog
 	mv GPGPU_SimTop.v $(VLIB_SRC_V)
-	sed -i "1i\`define PRINTF_COND 0" $(VLIB_SRC_V)
+	sed -i "1i\`define PRINTF_COND 1" $(VLIB_SRC_V)
 
 verilog: $(VLIB_SRC_V)
 

@@ -92,6 +92,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     val mshrStatus_st0 = Output(UInt(3.W))
     val stage2_ready = Input(Bool())
     val stage1_ready = Input(Bool())
+    // stall the core req when releasing the mshr primary entry
+    //TODO 真正的需要stall的场景时当release的primary entry和当前coreReq的blockAddr相同
+    val releasing_stall = Output(Bool())
   })
   // head of entry, for comparison
   val blockAddr_Access = RegInit(VecInit(Seq.fill(NMshrEntry)(0.U(bABits.W))))
@@ -103,7 +106,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   val entry_valid = Reverse(Cat(subentry_valid.map(Cat(_).orR)))
   val probestatus = RegInit(false.B)
   val MSHR_st1 = Module(new Queue(new MSHRpipe1Reg(NMshrEntry,log2Up(NMshrSubEntry)+1),1,true,false))
+  val releasing_stall = RegInit(VecInit(Seq.fill(NMshrEntry)(false.B)))
 
+  io.releasing_stall := releasing_stall.asUInt.orR
   io.empty := !entry_valid.orR
   io.probestatus := MSHR_st1.io.deq.valid//probestatus
   /*Structure Diagram
@@ -351,5 +356,12 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
       subentry_valid(iofEn)(iofSubEn) := true.B
     } //order of when & elsewhen matters, as elsewhen cover some cases of when, but no op to them
   }
-}
 
+  for (iofEn <- 0 until NMshrEntry) {
+    when(iofEn.asUInt === entryMatchMissRsp && io.missRspIn.fire && releasing_stall(iofEn)) {
+      releasing_stall(iofEn) := false.B
+    }.elsewhen(iofEn.asUInt === entryMatchMissRsp && io.missRspIn.valid && !releasing_stall(iofEn)) {
+      releasing_stall(iofEn) := true.B
+    } 
+  }
+}

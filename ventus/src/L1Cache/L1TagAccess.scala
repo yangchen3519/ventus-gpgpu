@@ -15,12 +15,13 @@ import chisel3._
 import chisel3.util._
 import freechips.rocketchip.rocket.ASIdBits
 import top.parameters._
+import config.config.Parameters
 class tagCheckerResult(way: Int) extends Bundle{
   val waymask = UInt(way.W)
   val hit = Bool()
 }
 //This module contain Tag memory, its valid bits, tag comparator, and Replacement Unit
-class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boolean)extends Module{
+class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boolean)(implicit p: Parameters)extends Module{
   val io = IO(new Bundle {
     //From coreReq_pipe0
     val probeRead = Flipped(Decoupled(new SRAMBundleA(set)))//Probe Channel
@@ -57,6 +58,13 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     //For Inv
     val invalidateAll = Input(Bool())
     val tagready_st1 = Input(Bool())
+
+    // 本次写入cacheline位置的信息
+    val perLaneAddr_st1 = Input(Vec(num_lane, new DCachePerLaneAddr))
+    // 全局无效化时，dirty cacheline的 dirty mask
+    val dirtyMask_st1 = Output(UInt((dcache_BlockWords * BytesOfWord).W))
+    // 分配写要替换的 cacheline 的 dirty mask
+    val replace_dirty_mask_st1 = Output(UInt((dcache_BlockWords * BytesOfWord).W))
   })
   //TagAccess internal parameters
   val Length_Replace_time_SRAM: Int = 10
@@ -192,6 +200,67 @@ if(MMU_ENABLED) {
   )
   timeAccess.io.w.req <> timeAccessWArb.io.out//meta_entry_t::update_access_time
 
+  // ******      dirty_mask_array    ******
+  //! 不能使用寄存器阵列实现，因为会将verilog代码扩大10倍有余，编译压力太大
+  //! 使用阵列的输出同样有个问题，就是阵列是不能一个clk清零的，同时也为了降低写端口的仲裁，直接将way_dirty寄存器用作阵列的valid信号
+  // dirty_mask阵列用来记录cacheline中被修改的字节，在写回L2时，只写dirty_mask中为1的位
+  // 这个阵列的设计是为了防止多个SM对同一个cacheline的不同部分进行写入时，导致的一致性问题
+  // val dirty_mask = RegInit(VecInit(Seq.fill(set)(VecInit(Seq.fill(way)(VecInit(Seq.fill(dcache_BlockWords)(0.U(BytesOfWord.W))))))))  
+  val dirtyMaskAccess = Module(new SRAMTemplate(
+    UInt((dcache_BlockWords * BytesOfWord).W),
+    set = set,
+    way = way,
+    shouldReset = false,
+    holdRead = true,
+    singlePort = false,
+    bypassWrite = true
+  ))
+  // 读有3种情况，首先是每次needreplace时，需要读取被冲刷的dirty_mask；然后是无效化时，需要依次读取所有dirty cacheline的dirty_mask；
+  // 最后是每次常规读写命中时，需要读取被命中cacheline的dirty_mask与本次写入的dirty_mask，相或得到本次的dirty_mask
+  // 因为针对无效化的读是只要有dirty就会一直读，所以要将其优先级放至最低，否则常规写的命中就会一直读不到
+  val dirtyMaskArb = Module(new Arbiter(new SRAMBundleA(set),3))
+  dirtyMaskAccess.io.r.req <> dirtyMaskArb.io.out
+  // 需要在发生分配写的时候就发起读请求，因为在分配写流程的st1阶段，已经能确定被冲刷的cacheline，且要返回给core内
+  // 这时候再发起读请求就跟不上时序。所以可以提前于判断是否命中的时候就读出来，反正最后都由need_replace信号作为总的使能
+  dirtyMaskArb.io.in(0).valid := io.allocateWrite.fire
+  dirtyMaskArb.io.in(0).bits.setIdx := io.allocateWrite.bits.setIdx
+  // 在常规写前命中前，需要读取这个set的dirty mask，如果写命中了，需要将读出来的值与本次写入的dirty mask相或
+  dirtyMaskArb.io.in(1) <> io.probeRead
+  // 只要有dirty时就会发起读请求，但这个读请求只会在顶层的 flushChoosen 信号拉高时才有效
+  // 在无效化时，根据之前的流水级，当hasDirty_st0为真时发起读请求，直接将读到的值赋值给out即可
+  dirtyMaskArb.io.in(2).valid := hasDirty_st0
+  dirtyMaskArb.io.in(2).bits.setIdx := choosenDirtySetIdx_st0
+
+
+  // 从 perLaneAddr_st1 中构造要写入的dirty mask
+  // WireInit不是只执行一次的初始化，而是每个时钟周期都会将Wire重置为初始值,这是组合逻辑，不是寄存器逻辑
+  // 会产生类似这样的组合逻辑: assign dirtyMaskPerCL[0] = (条件0满足且blockOffset==0) ? 新值 : 0;
+  // dirtyMaskPerCL_init 代表本次要写入的 dirty mask 的初始值，需要与原有的值相或得到本次写入的 dirty mask
+  val dirtyMaskPerCL_init = WireInit(VecInit(Seq.fill(dcache_BlockWords)(0.U(BytesOfWord.W))))
+  val dirtyMaskPerCL = WireInit(VecInit(Seq.fill(dcache_BlockWords)(0.U(BytesOfWord.W))))
+  for (i <- 0 until num_lane) {
+    when(io.perLaneAddr_st1(i).activeMask) {
+      dirtyMaskPerCL_init(io.perLaneAddr_st1(i).blockOffset) := io.perLaneAddr_st1(i).wordOffset1H 
+    }
+  }
+  dirtyMaskPerCL := (dirtyMaskPerCL_init.asUInt | dirtyMaskAccess.io.r.resp.data(OHToUInt(iTagChecker.io.waymask))).asTypeOf(dirtyMaskPerCL)
+
+  // 一旦用到 dirtyMaskAccess 读出的值，就应该在下个周期将这个位置的 dirty mask 写0，所以写也需要一个仲裁器
+  val dirtyMaskWriteArb = Module(new Arbiter(new SRAMBundleAW(UInt((dcache_BlockWords * BytesOfWord).W), set, way), 3))
+  dirtyMaskAccess.io.w.req <> dirtyMaskWriteArb.io.out
+
+  // 分配写在st1确定是否需要替换，如果要替换，读出的dirty mask就是被用到，需要在这个阶段发起写0请求
+  // 默认 io.needReplace.get 只会拉高一个周期，且不会被阻塞
+  dirtyMaskWriteArb.io.in(0).valid := io.needReplace.get
+  dirtyMaskWriteArb.io.in(0).bits.apply(data = 0.U, setIdx = allocateWrite_st1.setIdx, waymask = Replacement.io.waymask_st1)
+  // 在常规读写命中时，即第一级流水发起写请求，只有这个写请求是给阵列写实际值
+  dirtyMaskWriteArb.io.in(1).valid := iTagChecker.io.cache_hit && io.probeIsWrite_st1.get
+  dirtyMaskWriteArb.io.in(1).bits.apply(data = dirtyMaskPerCL.asUInt, setIdx = RegNext(io.probeRead.bits.setIdx), waymask = iTagChecker.io.waymask)
+  // 只有当 flushChoosen 拉高时，读出来 dirty mask 才会被用到，需要被写0
+  // 这里的 valid 需要用 RegNext 延迟一周期是因为在dcache的顶层模块将 InvOrFluMemReqValid_st1 里也延了一个clk
+  // 不使用dcache中的 InvOrFluMemReqValid_st1 是因为与tag的发出对齐
+  dirtyMaskWriteArb.io.in(2).valid := RegNext(io.flushChoosen.get.valid)
+  dirtyMaskWriteArb.io.in(2).bits.apply(data = 0.U, setIdx = RegNext(choosenDirtySetIdx_st0), waymask = choosenDirtyWayMask_st1)
 
   iTagChecker.io.tag_of_set := tagBodyAccess.io.r.resp.data//st1
   //iTagChecker.io.ASID_of_set := ASIDAccess.io.r.resp.data
@@ -235,6 +304,8 @@ if(MMU_ENABLED) {
     io.a_addrReplacement_st1.get := Cat(tagnset, //setIdx
       0.U((dcache_BlockOffsetBits + dcache_WordOffsetBits).W)) //blockOffset+wordOffset
   }
+  // 需要将dirtyMaskAccess读出的数据与way_dirtyAfterValid相与，因为
+  io.replace_dirty_mask_st1 := dirtyMaskAccess.io.r.resp.data(OHToUInt(Replacement.io.waymask_st1)).asUInt 
 
   tagBodyAccess.io.w.req.valid := io.allocateWriteTagSRAMWValid_st1//meta_entry_t::allocate
   tagBodyAccess.io.w.req.bits.apply(data = io.allocateWriteData_st1, setIdx = allocateWrite_st1.setIdx, waymask = Replacement.io.waymask_st1)
@@ -266,6 +337,7 @@ if(MMU_ENABLED) {
     //val choosenDirtyWayMask_st1 = RegNext(choosenDirtyWayMask_st0)
     io.dirtyTag_st1.get := choosenDirtyTag_st1
     io.dirtySetIdx_st0.get := choosenDirtySetIdx_st0
+    io.dirtyMask_st1 := dirtyMaskAccess.io.r.resp.data(OHToUInt(choosenDirtyWayMask_st1)).asUInt
 
     io.dirtyWayMask_st0.get := choosenDirtyWayMask_st0
     io.hasDirty_st0.get := hasDirty_st0//RegNext(hasDirty_st0)
