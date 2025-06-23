@@ -4,6 +4,7 @@ ifneq ($(words $(CURDIR)),1)
 endif
 
 RELEASE ?= 0
+PREFIX ?= $(CURDIR)/install
 
 #=====================================================================
 # Helpers
@@ -164,6 +165,12 @@ lib: $(VLIB_TARGET)
 info-verilator:
 	$(VLIB_VERILATOR) -V
 
+install: $(VLIB_TARGET)
+	install -d $(PREFIX)/lib
+	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/
+	install -d $(PREFIX)/include
+	install -m 644 ventus_rtlsim.h $(PREFIX)/include/
+
 clean-lib:
 	-rm -f $(VLIB_DIR_BUILDOBJ_DEBUG)/*.a $(VLIB_DIR_BUILDOBJ_DEBUG)/*.o $(VLIB_DIR_BUILDOBJ_DEBUG)/*.so
 	-rm -f $(VLIB_DIR_BUILDOBJ_RELEASE)/*.a $(VLIB_DIR_BUILDOBJ_RELEASE)/*.o $(VLIB_DIR_BUILDOBJ_RELEASE)/*.so
@@ -179,4 +186,4 @@ clean-verilated:
 clean-verilog: clean-verilated
 	-rm -f $(VLIB_SRC_V)
 
-.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog info-verilator
+.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog info-verilator install
