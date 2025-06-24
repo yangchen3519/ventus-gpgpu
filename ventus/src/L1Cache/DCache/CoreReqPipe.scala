@@ -403,7 +403,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
             }.otherwise{
               st1_ready := !io.memRsp_coreRsp.valid //true.B
             }
-          }        
+          }.otherwise{
+            st1_ready := false.B
+          }
       }.otherwise { //Miss
         when(Control_st1.isRead) {
           when(io.MissReq_MSHR.ready && (MshrStatus === PrimaryAvail || MshrStatus === SecondaryAvail) //即memReq_Q.io.enq.ready
@@ -413,10 +415,14 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
               }.otherwise{
                 st1_ready := io.MissReq_Mem.ready
               }
+          }.otherwise{
+            st1_ready := false.B
           }
         }.otherwise { //isWrite
          when(CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
             st1_ready := true.B
+          }.otherwise{
+            st1_ready := false.B
           }
         }
       }
@@ -475,7 +481,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //==========
   // st2 pipe reg
-  when(st1_valid && st1_ready && CacheHit_st1){
+  when(st1_valid && st1_ready && (CacheHit_st1 || WriteMiss_st1)){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := DontCare
@@ -502,6 +508,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }.otherwise{
     CoreRsp_pipeReg_st1_st2.enq.valid := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits := DontCare
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
   }
   io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.deq.ready
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid

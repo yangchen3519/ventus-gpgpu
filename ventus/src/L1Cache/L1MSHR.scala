@@ -91,6 +91,14 @@ class MSHRpipe1Reg(WidthMatchProbe: Int, SubEntryNext: Int) extends Bundle{
   val full = Bool()
 }
 
+object MSHRStatus{
+  def PrimaryAvail : UInt = 0.U(3.W)
+  def PrimaryFull : UInt = 1.U(3.W)
+  def SecondaryAvail : UInt = 2.U(3.W)
+  def SecondaryFull : UInt = 3.U(3.W)
+  def ReturnMatch : UInt = 4.U(3.W)
+}
+
 class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:Int, val NMshrSubEntry:Int, val AsidBits:Int) extends Module {
   val io = IO(new Bundle {
     val probe = Flipped(ValidIO(new MSHRprobe(bABits,AsidBits)))
@@ -287,18 +295,19 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
 
 
   // mshrStatus_st0 := mshrStatus_st1_w
-
+  val subentryFull_sel = subentryStatus.io.full
+  val subentryAvail_sel = !subentryStatus.io.full
   //mshrStatus依赖primaryMiss和SecondaryMiss，它们依赖entryValid。
   //mshrStatus必须是寄存器，需要在probe valid的下个周期正确显示。entryValid更新的下一个周期已经来不及。
   //所以用组合逻辑加工一次mshrStatus。
-  when(secondaryMiss && (mshrStatus_st1_r === 0.U || mshrStatus_st1_r === 1.U)&& io.stage2_ready) {
-    when(subEntryFull) {
-      mshrStatus_st1_w := 3.U //SECONDARY_FULL
-    }.otherwise {
-      mshrStatus_st1_w := 2.U //SECONDARY_AVAIL
-    }
-  }.otherwise {
-    mshrStatus_st1_w := mshrStatus_st1_r
+  when(mainEntryFull){
+    mshrStatus_st1_w := MSHRStatus.PrimaryFull
+  }.elsewhen(subentryFull_sel && secondaryMiss){
+    mshrStatus_st1_w := MSHRStatus.SecondaryFull
+  }.elsewhen(subentryAvail_sel && secondaryMiss){
+    mshrStatus_st1_w := MSHRStatus.SecondaryAvail
+  }.otherwise{
+    mshrStatus_st1_w := MSHRStatus.PrimaryAvail
   }
   io.probeOut_st1.probeStatus := mshrStatus_st1_w
   when(io.probe.fire && !probestatus) {
