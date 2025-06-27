@@ -69,7 +69,7 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
         VecInit(Seq.fill(BytesOfWord)(false.B)))))))*/
 
   // ******     queues     ******
-  val DepthCoreRsp_Q:Int=4
+  val DepthCoreRsp_Q: Int = num_thread
   val coreRsp_Q = Module(new Queue(new ShareMemCoreRsp,entries = DepthCoreRsp_Q,flow=false,pipe=true))
   //this queue also work as a pipeline reg, so cannot flow
   val coreRsp_QAlmstFull = Wire(Bool())
