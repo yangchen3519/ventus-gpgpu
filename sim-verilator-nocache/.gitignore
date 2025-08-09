@@ -1,0 +1,8 @@
+logs/
+build/
+.cache/
+install/
+*.json
+*.fir
+*.v
+*.fst
