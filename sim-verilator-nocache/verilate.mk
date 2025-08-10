@@ -134,7 +134,7 @@ default: lib
 
 $(VLIB_SRC_V): $(VLIB_SRC_SCALA)
 	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_top_nocache --target chirrtl --target-dir sim-verilator-nocache
-	~/.cache/llvm-firtool/1.62.0/bin/firtool --verilog GPGPU_top_nocache.fir -o $(VLIB_SRC_V)
+	firtool --verilog GPGPU_top_nocache.fir -o $(VLIB_SRC_V)
 	sed -i "1i\`define PRINTF_COND 1" $(VLIB_SRC_V)
 
 verilog: $(VLIB_SRC_V)
