@@ -1,1 +1,1 @@
-testcase/ventus_args.txt
+testcase/matadd/ventus_cmdargs.txt

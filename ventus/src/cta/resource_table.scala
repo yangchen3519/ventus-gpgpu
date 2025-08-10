@@ -617,7 +617,7 @@ class resource_table_ram(NUM_RESOURCE: Int, NUM_WG_SLOT: Int = CONFIG.GPU.NUM_WG
 /**
  * It is assumed that once alloc/dealloc.valid = true, it will keep valid until alloc/dealloc.fire
  */
-class resource_table_top(val NUM_CU_PER_GROUP: Int = 2) extends Module {
+class resource_table_top(val NUM_CU_PER_GROUP: Int = 1) extends Module {
   // Constants used in IO
   val NUM_LDS = CONFIG.WG.NUM_LDS_MAX
   val NUM_SGPR = CONFIG.WG.NUM_SGPR_MAX
@@ -645,7 +645,7 @@ class resource_table_top(val NUM_CU_PER_GROUP: Int = 2) extends Module {
   // Convert alloc/dealloc request CU ID to RT_handler group ID and local CU ID
   def convert_cu_id(cu_id_global: UInt): (UInt, UInt) = {
     val cu_id_reversed = Reverse(cu_id_global)
-    val cu_id_local = cu_id_reversed(log2Ceil(NUM_CU_PER_GROUP)-1, 0)
+    val cu_id_local = if(NUM_CU_PER_GROUP > 1) cu_id_reversed(log2Ceil(NUM_CU_PER_GROUP)-1, 0) else WireInit(UInt(0.W), 0.U)
     val cu_id_group = if(NUM_CU > NUM_CU_PER_GROUP) cu_id_reversed(log2Ceil(NUM_CU)-1, log2Ceil(NUM_CU_PER_GROUP)) else WireInit(UInt(0.W), 0.U)
     (cu_id_group, cu_id_local)
   }

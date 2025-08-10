@@ -396,7 +396,7 @@ class AdvancedTest extends AnyFreeSpec with ChiselScalatestTester{ // Working in
               k <- 0 until size3d(2)
             } yield meta.generateHostReq(i, j, k, BigInt(ptbr_pos))
           )
-          ptbr_pos += 1
+          // ptbr_pos += 1
         }
         else {
           if(MMU_ENABLED){

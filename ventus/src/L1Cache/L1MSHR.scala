@@ -87,7 +87,7 @@ class getEntryStatusRsp(nEntry: Int) extends Module{
 
 class MSHRpipe1Reg(WidthMatchProbe: Int, SubEntryNext: Int) extends Bundle{
   val entryMatchProbe = UInt(WidthMatchProbe.W)
-  val subEntryIdx = UInt(SubEntryNext.W) 
+  val subEntryIdx = UInt(SubEntryNext.W)
   val full = Bool()
 }
 
@@ -118,6 +118,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     val mshrStatus_st0 = Output(UInt(3.W))
     val stage2_ready = Input(Bool())
     val stage1_ready = Input(Bool())
+    // stall the core req when releasing the mshr primary entry
+    //TODO 真正的需要stall的场景时当release的primary entry和当前coreReq的blockAddr相同
+    val releasing_stall = Output(Bool())
   })
   // head of entry, for comparison
   val blockAddr_Access = RegInit(VecInit(Seq.fill(NMshrEntry)(0.U(bABits.W))))
@@ -129,7 +132,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   val entry_valid = Reverse(Cat(subentry_valid.map(Cat(_).orR)))
   val probestatus = RegInit(false.B)
   val MSHR_st1 = Module(new Queue(new MSHRpipe1Reg(NMshrEntry,log2Up(NMshrSubEntry)+1),1,true,false))
+  val releasing_stall = RegInit(VecInit(Seq.fill(NMshrEntry)(false.B)))
 
+  io.releasing_stall := releasing_stall.asUInt.orR
   io.empty := !entry_valid.orR
   io.probestatus := MSHR_st1.io.deq.valid//probestatus
   /*Structure Diagram
@@ -223,7 +228,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
 
   assert(PopCount(entryMatchProbe) <= 1.U)
 //RegEnable(OHToUInt(entryMatchProbe),io.missReq.fire)
-  val secondaryMiss = MSHR_st1.io.deq.bits.entryMatchProbe.orR 
+  val secondaryMiss = MSHR_st1.io.deq.bits.entryMatchProbe.orR
   val secondaryMiss_st0 = entryMatchProbe.orR
   val primaryMiss_st0 = !secondaryMiss_st0
   val primaryMiss = !secondaryMiss
@@ -395,6 +400,14 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
       subentry_valid(iofEn)(iofSubEn) := true.B
     } //order of when & elsewhen matters, as elsewhen cover some cases of when, but no op to them
   }
+
+  for (iofEn <- 0 until NMshrEntry) {
+    when(iofEn.asUInt === entryMatchMissRsp && io.missRspIn.fire && releasing_stall(iofEn)) {
+      releasing_stall(iofEn) := false.B
+    }.elsewhen(iofEn.asUInt === entryMatchMissRsp && io.missRspIn.valid && !releasing_stall(iofEn)) {
+      releasing_stall(iofEn) := true.B
+    }
+  }
 }
 class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:Int, val AsidBits:Int) extends Module {
   val io = IO(new Bundle {
@@ -422,7 +435,7 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   entryStatus.io.valid_list := entry_valid_uint
   val ptr = entryStatus.io.next
   io.missReq.ready := io.stage1_ready
-  if(MMU_ENABLED){ 
+  if(MMU_ENABLED){
     val ASID_Access = RegInit(VecInit(Seq.fill(NMshrEntry)(0.U(AsidBits.W))))
     entryMatchProbe := Reverse(Cat(blockAddr_Access.map(_ === io.missReq.bits.blockAddr))) & entry_valid.asUInt & Reverse(Cat(ASID_Access.map(_ === io.missReqAsid.get)))& Reverse(Cat(wordOffset.map(_ === io.missReq.bits.wordOffset)))
     entryMatchProbeBlock := Reverse(Cat(blockAddr_Access.map(_ === io.missReq.bits.blockAddr))) & entry_valid.asUInt & Reverse(Cat(ASID_Access.map(_ === io.missReqAsid.get)))
@@ -452,14 +465,14 @@ class SpecialMSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshr
   missRspOut_st1.io.enq.bits.instrId := io.missRspIn.bits.instrId
   missRspOut_st1.io.enq.bits.UncacheRsp := true.B
   val conditionVec = Wire(Vec(NMshrEntry, Bool()))
-  
+
   for (i <- 0 until NMshrEntry) {
     conditionVec(i) := entry_valid(i) && (type_Access(i) === 0.U) && !(i.asUInt === entryMatchMissRsp && io.missRspIn.valid)
   }
   probeMatchRsp := (OHToUInt(entryMatchProbeBlock ) === entryMatchMissRsp) && io.missRspIn.valid
   io.probeOut_st1.hitblock := entryMatchProbeBlock.orR && !probeMatchRsp
   io.probeOut_st1.hitblockIdx := OHToUInt(entryMatchProbeBlock)
-  io.probeOut_st1.LRexist := conditionVec.reduce(_||_) 
+  io.probeOut_st1.LRexist := conditionVec.reduce(_||_)
   io.probeOut_st1.a_source := ptr
   io.empty := !entry_valid.reduce(_||_)
   io.full := entry_valid.reduce(_&&_)

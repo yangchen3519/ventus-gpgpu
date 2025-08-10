@@ -4,8 +4,11 @@ import L2cache.{CacheParameters, InclusiveCacheMicroParameters, InclusiveCachePa
 import chisel3.util._
 import mmu.SV32.{asidLen, paLen, vaLen}
 // TODO: MOVE parameters to `ventus/top'
+
 object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, not the last idx.
   def num_sm = 2
+  var num_warp = 8
+  var num_thread = 32
   val SINGLE_INST: Boolean = false
   val SPIKE_OUTPUT: Boolean = true
   val INST_CNT: Boolean = true
@@ -14,23 +17,23 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   val DCACHE_DEBUG: Boolean = false
   def MMU_ASID_WIDTH = mmu.SV32.asidLen
   val wid_to_check = 2
-  def num_bank = 4
+  def num_bank = 4                  // # of banks for register file
   def num_collectorUnit = num_warp
-  def num_vgpr:Int = 4096
-  def num_sgpr:Int = 4096
+  def num_vgpr:Int = 256*num_warp
+  def num_sgpr:Int = 256*num_warp
   def depth_regBank = log2Ceil(num_vgpr/num_bank)
   def regidx_width = 5
 
   def regext_width = 3
 
-  var num_warp = 8
-
   def num_cluster = 1
 
   def num_sm_in_cluster = num_sm / num_cluster
-  def depth_warp = log2Ceil(num_warp)
+  def depth_warp = if (num_warp == 1) 1 else log2Ceil(num_warp)
 
-  var num_thread = 4
+  // for register file bank access only, in operand collector
+  // Calculate the highest slice index, ensuring it does not exceed the actual width of 'wid'
+  def widSliceHigh = scala.math.min(log2Ceil(num_bank) - 1, depth_warp - 1)
 
   def depth_thread = log2Ceil(num_thread)
 
@@ -140,6 +143,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def l1tlb_ways = 8
 
+  val LDS_BASE : BigInt = 0x70000000  // LDS base address: a hyperparameter used within each SM
+
   def NUMBER_CU = num_sm
   def NUMBER_VGPR_SLOTS = num_vgpr
   def NUMBER_SGPR_SLOTS = num_sgpr
@@ -185,7 +190,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_LDS_MAX = sharemem_size              // Max number of LDS  occupied by a workgroup
       val NUM_SGPR_MAX = num_sgpr                  // Max number of sgpr occupied by a workgroup
       val NUM_VGPR_MAX = num_vgpr                  // Max number of vgpr occupied by a workgroup
-      val NUM_PDS_MAX = 1024*num_thread*2          // Max number of PDS  occupied by a *wavefront*
+      val NUM_PDS_MAX = 4096*num_thread            // Max number of PDS  occupied by a *wavefront*
       //val NUM_GDS_MAX = 1024                     // Max number of GDS  occupied by a workgroup, useless
 
       // WF tag = cat(wg_slot_id_in_cu, wf_id_in_wg)

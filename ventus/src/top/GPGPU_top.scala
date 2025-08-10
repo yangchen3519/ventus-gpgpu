@@ -232,7 +232,12 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
       io.asid_fill.foreach{ in =>
         asid_lookup.io.fill_in := in
       }
-      l2tlb.io.invalidate := 0.U.asTypeOf(l2tlb.io.invalidate)
+    //todo  连接 L2 TLB 的 invalidate 信号，目前采用每个SM执行完block的flush信号的或io.host_rsp.valid
+    l2tlb.io.invalidate.valid := io.host_rsp.valid
+    // val asid_invalid = (asid_lookup.io.fill_in.bits.asid.asUInt - 1.U).asTypeOf(l2tlb.io.invalidate.bits)
+    //todo asid的值目前采用asid_lookup的填充值，这个值是会保持的，是否应该有软件给出
+    val asid_invalid = asid_lookup.io.fill_in.bits.asid.asTypeOf(l2tlb.io.invalidate.bits)
+    l2tlb.io.invalidate.bits := asid_invalid  // ASID 值，要清空指定地址空间的条目
 
       // sm <-> l2tlb
       val sm_tlb_xbar = Module(new L1ToL2TlbXBar(SV.get, NSms * NCacheInSM)(Some(this)))

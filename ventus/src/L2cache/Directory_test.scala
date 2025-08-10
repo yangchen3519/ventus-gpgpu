@@ -101,7 +101,7 @@ class Directory_test(params: InclusiveCacheParameters_lite) extends Module
 
   val singlePort = false
   val cc_dir = Module(new SRAMTemplate(UInt(codeBits.W), set=params.cache.sets, way=params.cache.ways,
-    shouldReset=true, holdRead=false, singlePort=singlePort,bypassWrite = true))
+    shouldReset=true, holdRead=true, singlePort=singlePort,bypassWrite = true))
 
   // must inspect contents => max size 1
   // a flow Q creates a WaR hazard... this MIGHT not cause a problem

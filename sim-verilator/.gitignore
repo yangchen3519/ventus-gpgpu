@@ -1,6 +1,7 @@
 logs/
-obj_dir/
+build/
 .cache/
+install/
 *.json
 *.fir
 *.v

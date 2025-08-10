@@ -121,7 +121,7 @@ class allocator extends Module {
   // =
   val NUM_CU = CONFIG.GPU.NUM_CU
   val NUM_RT_RESULT = CONFIG.RESOURCE_TABLE.NUM_RESULT
-  val RESOURCE_CHECK_CU_STEP = 2  // how many CU is check in one clock cycle (FSM.RESOURCE_CHECK)
+  val RESOURCE_CHECK_CU_STEP = 1  // how many CU is check in one clock cycle (FSM.RESOURCE_CHECK)
   assert(NUM_CU % RESOURCE_CHECK_CU_STEP == 0)
 
   // =

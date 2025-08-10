@@ -20,6 +20,7 @@ compile:
 test:
 	mkdir -p test_run_dir
 	./mill -i ventus[6.4.0].tests.testOnly play.AdvancedTest 2>&1 | tee test_run_dir/test.log
+	# ./mill -i ventus[6.4.0].tests.testOnly play.AsidTests 2>&1 | tee test_run_dir/test.log 	#for asid test, provide two asid test case
 
 verilog:
 	./mill ventus[6.4.0].run
