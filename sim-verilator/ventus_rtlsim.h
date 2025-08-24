@@ -155,6 +155,17 @@ DLL_PUBLIC bool ventus_rtlsim_pmemcpy_h2d(ventus_rtlsim_t* sim, paddr_t dst, con
 // copy data from device to host
 DLL_PUBLIC bool ventus_rtlsim_pmemcpy_d2h(ventus_rtlsim_t* sim, void* dst, paddr_t src, uint64_t size);
 
+#ifdef ENABLE_GVM
+DLL_PUBLIC int fw_vt_dev_open();
+DLL_PUBLIC int fw_vt_dev_close();
+DLL_PUBLIC int fw_vt_buf_alloc(uint64_t size, uint64_t *vaddr, int BUF_TYPE, uint64_t taskID, uint64_t kernelID);
+DLL_PUBLIC int fw_vt_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, uint64_t kernelID);
+DLL_PUBLIC int fw_vt_one_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, uint64_t kernelID);
+DLL_PUBLIC int fw_vt_copy_to_dev(uint64_t dev_vaddr,const void *src_addr, uint64_t size, uint64_t taskID, uint64_t kernelID);
+DLL_PUBLIC int fw_vt_start(void* metaData, uint64_t taskID);
+DLL_PUBLIC int fw_vt_upload_kernel_file(const char* filename, int taskID);
+#endif // ENABLE_GVM
+
 #undef DLL_PUBLIC
 #undef DLL_LOCAL
 

@@ -4,6 +4,9 @@
 
 #include <vector>
 #include <cstdint>
+#include <tuple>
+#include <map>
+#include <array>
 
 // CTA -> Warp 分配
 struct Cta2WarpData {
@@ -13,8 +16,9 @@ struct Cta2WarpData {
   uint32_t hardware_warp_id;
   uint32_t sgpr_base;
   uint32_t vgpr_base;
+  uint32_t wg_slot_id_in_warp_sche;
 };
-std::vector<Cta2WarpData> g_cta2warp_data;
+extern std::vector<Cta2WarpData> g_cta2warp_data;
 // Instr Dispatch
 // at each cycle, the dut will push the dispatched instruction to this vector
 // the gvm top module will read this vector and compare with the ref model,
@@ -27,7 +31,7 @@ struct InsnDispatchData {
   uint32_t dispatch_id;
   bool is_extended;
 };
-std::vector<InsnDispatchData> g_insn_dispatch_data;
+extern std::vector<InsnDispatchData> g_insn_dispatch_data;
 // XReg Writeback
 struct XRegWritebackData {
   uint32_t sm_id;
@@ -39,7 +43,7 @@ struct XRegWritebackData {
   uint32_t insn;
   uint32_t dispatch_id;
 };
-std::vector<XRegWritebackData> g_xreg_wb_data;
+extern std::vector<XRegWritebackData> g_xreg_wb_data;
 struct XRegData {
   uint32_t sm_id;
   uint32_t bank_id;
@@ -47,5 +51,29 @@ struct XRegData {
   uint32_t num_sgpr_slots;
   std::vector<uint32_t> bank_data;
 };
-std::vector<XRegData> g_xreg_data;
-uint32_t g_sgprUsage = 64; // num of sgpr used in one warp
+extern std::vector<XRegData> g_xreg_data;
+extern uint32_t g_sgprUsage; // num of sgpr used in one warp
+
+// VReg Writeback
+struct VRegWritebackData {
+  uint32_t sm_id;
+  std::array<uint32_t, 32> rd_data; // 向量写回数据，32个线程
+  bool is_vector_wb;
+  uint32_t reg_idx; // 写回地址
+  uint32_t hardware_warp_id;
+  uint32_t pc;
+  uint32_t insn;
+  uint32_t dispatch_id;
+  std::array<bool, 32> wvd_mask; // 向量写回掩码，32个线程
+};
+extern std::map<std::tuple<uint32_t,uint32_t,uint32_t>, VRegWritebackData> g_vreg_wb_data;
+
+// Barrier
+struct BarDoneData {
+  uint32_t sm_id;
+  uint32_t wg_slot_id;
+  uint32_t pc;
+  uint32_t insn;
+  uint32_t dispatch_id;
+};
+extern std::vector<BarDoneData> g_bar_done_data;

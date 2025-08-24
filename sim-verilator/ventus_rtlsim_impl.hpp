@@ -8,6 +8,10 @@
 #include <verilated.h>
 #include <verilated_fst_c.h>
 
+#ifdef ENABLE_GVM
+#include "gvm.hpp"
+#endif // ENABLE_GVM
+
 #define SNAPSHOT_WAKEUP_SIGNAL SIGRTMIN
 typedef struct {
     bool is_child;
@@ -25,6 +29,9 @@ extern "C" struct ventus_rtlsim_t {
     ventus_rtlsim_config_t config;
     ventus_rtlsim_step_result_t step_status;
     std::unique_ptr<PhysicalMemory> pmem;
+#ifdef ENABLE_GVM
+    gvm_t gvm;
+#endif // ENABLE_GVM
 
     void constructor(const ventus_rtlsim_config_t* config);
     void dut_reset() const;

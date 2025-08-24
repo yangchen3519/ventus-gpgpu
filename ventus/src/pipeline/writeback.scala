@@ -91,5 +91,18 @@ class Writeback(num_x:Int,num_v:Int) extends Module{
     gvm_x_wb.io.pc := RegNext(io.out_x.bits.spike_info.get.pc) // int
     gvm_x_wb.io.inst := RegNext(io.out_x.bits.spike_info.get.inst) // int
     gvm_x_wb.io.dispatch_id := RegNext(io.out_x.bits.spike_info.get.dispatch_id.get) // int
+
+    val gvm_v_wb = Module(new GvmDutVRegWriteback)
+    gvm_v_wb.io.clock := clock
+    gvm_v_wb.io.fire := io.out_v.fire // bit
+    gvm_v_wb.io.sm_id := io.out_v.bits.spike_info.get.sm_id.pad(32)
+    gvm_v_wb.io.rd := io.out_v.bits.wb_wvd_rd.asUInt // UInt - 向量数据转换为一维信号
+    gvm_v_wb.io.is_vector_wb := io.out_v.bits.wvd // bit - 向量写回使能
+    gvm_v_wb.io.reg_idx := io.out_v.bits.reg_idxw.pad(32)
+    gvm_v_wb.io.hardware_warp_id := io.out_v.bits.warp_id.pad(32)
+    gvm_v_wb.io.pc := io.out_v.bits.spike_info.get.pc // int
+    gvm_v_wb.io.inst := io.out_v.bits.spike_info.get.inst // int
+    gvm_v_wb.io.dispatch_id := io.out_v.bits.spike_info.get.dispatch_id.get // int
+    gvm_v_wb.io.wvd_mask := io.out_v.bits.wvd_mask.asUInt // 向量写回掩码转换为一维信号
   }
 }

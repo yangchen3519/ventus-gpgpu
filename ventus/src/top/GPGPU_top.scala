@@ -492,8 +492,9 @@ if(MMU_ENABLED) {
   // pipe.io.shared_rsp.bits.isWrite:=sharedmem.io.coreRsp.bits.isWrite
   
   if(GVM_ENABLED){
+    val WF_ID_WIDTH = log2Ceil(num_warp_in_a_block)
     val gvm_cta2warp = Module(new GvmDutCta2Warp)
-    // CTA 调度器向 SM 分配 warp 时，获取寄存器起始地址
+    // CTA 调度器向 SM 分配 warp 时，获取软硬件 warp 对应关系、寄存器起始地址、wg_slot id in warp_scheduler
     gvm_cta2warp.io.clock := clock
     gvm_cta2warp.io.warp_req_fire := cta2warp.io.warpReq.fire
     gvm_cta2warp.io.software_wg_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wg_id.pad(32)
@@ -502,6 +503,7 @@ if(MMU_ENABLED) {
     gvm_cta2warp.io.hardware_warp_id := cta2warp.io.warpReq.bits.wid.pad(32)
     gvm_cta2warp.io.sgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_sgpr_base_dispatch.pad(32)
     gvm_cta2warp.io.vgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_vgpr_base_dispatch.pad(32)
+    gvm_cta2warp.io.wg_slot_id_in_warp_sche := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH-1, WF_ID_WIDTH)
   }
 }
 

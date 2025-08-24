@@ -13,7 +13,8 @@ void c_GvmDutCta2Warp(int software_wg_id,
                        int sm_id,
                        int hardware_warp_id,
                        int sgpr_base,
-                       int vgpr_base);
+                       int vgpr_base,
+                       int wg_slot_id_in_warp_sche);
 // Insn Dispatch
 void c_GvmDutInsnDispatch(int sm_id,
                             int hardware_warp_id,
@@ -37,4 +38,21 @@ void c_GvmDutXReg(int num_sm,
                    int num_sgpr_slots,
                    int xbanks_word,
                    int xbanks_word_idx);
-}
+// VReg Writeback  
+void c_GvmDutVRegWriteback(int sm_id,
+                            int rd_data,     // 单个线程的向量数据
+                            bool is_vector_wb,
+                            int reg_idx,
+                            int hardware_warp_id,
+                            int pc,
+                            int inst,
+                            int dispatch_id,
+                            bool wvd_mask,   // 单个线程的写回掩码
+                            int thread_idx); // 线程索引
+// Barrier done
+void c_GvmDutBarrierDone(int sm_id,
+                          int hardware_warp_id,
+                          int pc,
+                          int inst,
+                          int dispatch_id);
+} // extern "C"
