@@ -192,6 +192,7 @@ trait Ventus
   override def forkArgs = Seq("-Xmx32G", "-Xss192m")
   override def scalacOptions = super.scalacOptions() ++ Seq(
     "-language:reflectiveCalls",
+    "-Ymacro-annotations",
     "-deprecation",
     "-feature",
     "-Xcheckinit"

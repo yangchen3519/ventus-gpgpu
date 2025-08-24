@@ -36,6 +36,7 @@ import freechips.rocketchip.util.ReplacementPolicy
 import TLMessages._
 import MetaData._
 import freechips.rocketchip.regmapper.LFSR16Seed
+import top.parameters.SPIKE_OUTPUT
 
 class DirectoryEntry_lite (params: InclusiveCacheParameters_lite)extends Bundle
 {
@@ -140,7 +141,7 @@ class Directory_test(params: InclusiveCacheParameters_lite) extends Module
   val regout = cc_dir.io.r.resp.data //
   val ways = regout.asTypeOf(Vec(params.cache.ways,new DirectoryEntry_lite(params)))
   val flush_tag =ways(flush_way).tag
-  when(io.flush || io.invalidate  || (flush_issue_reg&& (io.result.fire || !RegNext(status_reg(flush_set).dirty(flush_way))))){
+  when(io.flush || io.invalidate  || (flush_issue_reg&& (io.result.fire || !RegNext(status_reg(flush_set).dirty(flush_way), false.B)))){
     flushCount := flushCount +1.U
   }.elsewhen(flushDone){
     flushCount :=0.U
@@ -227,9 +228,9 @@ for(i<- 0 until params.cache.sets){
 
   val setQuash_1 = wen && io.write.bits.set === io.read.bits.set //表示write到上次读出来的set
 
-  val setQuash=RegNext(setQuash_1)
+  val setQuash=RegNext(setQuash_1, false.B)
   val tagMatch_1= io.write.bits.data.tag===io.read.bits.tag
-  val tagMatch = RegNext(tagMatch_1) //这是之前打算read的tag
+  val tagMatch = RegNext(tagMatch_1, false.B) //这是之前打算read的tag
   val writeWay1 = RegInit(0.U(params.wayBits.W))
   writeWay1:=io.write.bits.way
 
@@ -284,27 +285,28 @@ for(i<- 0 until params.cache.sets){
 
   val timely_hit = (RegNext(io.read.bits.tag) ===io.write.bits.data.tag) && io.write.fire && (RegNext(io.read.bits.set)===io.write.bits.set)
 
+  val flush_issue_regnext = RegNext(flush_issue, false.B)
   io.read.ready := ((wipeDone && !io.write.fire) || (setQuash_1 && tagMatch_1)) && !flush_issue_reg  && io.result.ready//also fire when bypass
-  io.result.valid := Mux(RegNext(flush_issue), io.result.bits.last_flush|| RegNext(status_reg(flush_set).dirty(flush_way) && flush_issue), valid_signal)
+  io.result.valid := Mux(flush_issue_regnext, io.result.bits.last_flush|| RegNext(status_reg(flush_set).dirty(flush_way) && flush_issue), valid_signal)
   io.result.bits.hit := (hit || (setQuash && tagMatch )|| timely_hit) && (!about_replace)
-  io.result.bits.way  := Mux(RegNext(flush_issue), RegNext(flush_way),Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch,RegNext(io.write.bits.way),Mux(timely_hit,io.write.bits.way,victimWay))))
-  io.result.bits.put    :=Mux(RegNext(flush_issue),0.U,read_bits_reg.put)
-  io.result.bits.data   :=Mux(RegNext(flush_issue),0.U,read_bits_reg.data)
-  io.result.bits.offset :=Mux(RegNext(flush_issue),0.U,read_bits_reg.offset)
-  io.result.bits.size   :=Mux(RegNext(flush_issue),log2Up(params.cache.beatBytes).asUInt,read_bits_reg.size)
-  io.result.bits.set    :=Mux(RegNext(flush_issue),RegNext(flush_set),read_bits_reg.set)
-  io.result.bits.source :=Mux(RegNext(flush_issue),RegNext(flush_source_reg),read_bits_reg.source)
-  io.result.bits.tag    :=Mux(RegNext(flush_issue),RegNext(flush_tag),read_bits_reg.tag)
+  io.result.bits.way  := Mux(flush_issue_regnext, RegNext(flush_way, false.B),Mux(hit, OHToUInt(hits), Mux(setQuash && tagMatch,RegNext(io.write.bits.way),Mux(timely_hit,io.write.bits.way,victimWay))))
+  io.result.bits.put    :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.put)
+  io.result.bits.data   :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.data)
+  io.result.bits.offset :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.offset)
+  io.result.bits.size   :=Mux(flush_issue_regnext, log2Up(params.cache.beatBytes).asUInt, read_bits_reg.size)
+  io.result.bits.set    :=Mux(flush_issue_regnext, RegNext(flush_set, false.B), read_bits_reg.set)
+  io.result.bits.source :=Mux(flush_issue_regnext, RegNext(flush_source_reg, false.B), read_bits_reg.source)
+  io.result.bits.tag    :=Mux(flush_issue_regnext, RegNext(flush_tag, false.B), read_bits_reg.tag)
   //victim tag should be transfered when miss dirty
-  io.result.bits.opcode :=Mux(RegNext(flush_issue),Hint,read_bits_reg.opcode)
+  io.result.bits.opcode :=Mux(flush_issue_regnext, Hint, read_bits_reg.opcode)
 
-  io.result.bits.mask   :=Mux(RegNext(flush_issue),Fill(params.mask_bits,1.U),read_bits_reg.mask)
-  io.result.bits.dirty  :=Mux(RegNext(flush_issue),RegNext(status_reg(flush_set).dirty(flush_way)), Mux(not_replace,false.B,(status_reg(set).dirty(io.result.bits.way)).asBool))
-  io.result.bits.last_flush :=Mux(RegNext(flush_issue),RegNext(flushDone),false.B)
-  io.result.bits.flush  := RegNext(flush_issue)
+  io.result.bits.mask   :=Mux(flush_issue_regnext, Fill(params.mask_bits,1.U),read_bits_reg.mask)
+  io.result.bits.dirty  :=Mux(flush_issue_regnext, RegNext(status_reg(flush_set).dirty(flush_way), false.B), Mux(not_replace,false.B,(status_reg(set).dirty(io.result.bits.way)).asBool))
+  io.result.bits.last_flush :=Mux(flush_issue_regnext, RegNext(flushDone, false.B),false.B)
+  io.result.bits.flush  := RegNext(flush_issue, false.B)
   io.result.bits.victim_tag:= ways(io.result.bits.way).tag
   //todo what's the function of flush
-  io.result.bits.l2cidx := Mux(RegNext(flush_issue),0.U,read_bits_reg.l2cidx)
-  io.result.bits.param := Mux(RegNext(flush_issue),0.U,read_bits_reg.param)
+  io.result.bits.l2cidx := Mux(flush_issue_regnext, 0.U, read_bits_reg.l2cidx)
+  io.result.bits.param  := Mux(flush_issue_regnext, 0.U, read_bits_reg.param)
   io.result.bits.spike_info.foreach( _ := read_bits_reg.spike_info.getOrElse(0.U) )
 }

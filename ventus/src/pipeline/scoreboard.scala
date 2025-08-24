@@ -138,5 +138,6 @@ class Scoreboard extends Module{
   dontTouch(readw)
   dontTouch(readb)
   dontTouch(readf)
+  dontTouch(io)
   io.delay:=read1|read2|read3|readm|readw|readb|readf|read_op_colV|read_op_colX
 }

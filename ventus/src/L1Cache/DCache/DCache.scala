@@ -16,7 +16,6 @@ import SRAMTemplate._
 import chisel3._
 import chisel3.util._
 import config.config.Parameters
-import firrtl.Utils._
 import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_WordOffsetBits, num_block, num_thread}
 import mmu.SV32.{asidLen, paLen, vaLen}
 //import pipeline.parameters._
@@ -785,7 +784,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   MemReqArb.io.in(0).bits := dirtyReplace_st1
   MemReqArb.io.in(1).valid := coreReq_st1_valid  && coreReq_Q.io.deq.fire && ((writeMiss_st1 || readMiss_st1) && mshrProbeStatus === 0.U) && !injectTagProbe
   MemReqArb.io.in(1).bits := missMemReq
-  MemReqArb.io.in(2).valid := Mux(invalidatenodirty,flushL2 && WshrAccess.io.empty,RegNext(InvOrFluMemReqValid_st1))
+  MemReqArb.io.in(2).valid := Mux(invalidatenodirty,flushL2 && WshrAccess.io.empty,RegNext(InvOrFluMemReqValid_st1, false.B))
   MemReqArb.io.in(2).bits := InvOrFluMemReq
 
   // ******      l1_data_cache::memReq_pipe2_cycle      ******

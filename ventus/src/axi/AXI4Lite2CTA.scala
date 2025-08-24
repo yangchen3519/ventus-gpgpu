@@ -27,7 +27,7 @@ class AXI4Lite2CTA(val addrWidth:Int, val busWidth:Int) extends Module{
 
 
 
-  val regs = RegInit(VecInit(Seq.fill(18)(0.U(busWidth.W))))
+  val regs = RegInit(VecInit.fill(20)(0.U(busWidth.W)))
 
   io.rsp.ready:=false.B
   when(io.rsp.valid& !regs(17)(0)){
@@ -100,6 +100,9 @@ class AXI4Lite2CTA(val addrWidth:Int, val busWidth:Int) extends Module{
   io.data.bits.host_kernel_size_3d(0):=regs(13)
   io.data.bits.host_kernel_size_3d(1):=regs(14)
   io.data.bits.host_kernel_size_3d(2):=regs(15)
+  io.data.bits.host_pds_size_per_wf := regs(18)
+  io.data.bits.host_asid := regs(19)
+  io.data.bits.host_kernel_asid := regs(19)
 
   switch(out_state) {
     is(out_sIdle) {

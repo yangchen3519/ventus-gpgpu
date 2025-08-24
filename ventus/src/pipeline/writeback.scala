@@ -29,9 +29,9 @@ class Branch_back extends Module{
   arbiter.io.out<>io.out
   if (SPIKE_OUTPUT) {
     when(io.out.fire/* && io.out.bits.wid === wid_to_check.U*/) {
-      printf(p"sm ${io.out.bits.spike_info.get.sm_id} warp ${io.out.bits.wid} ")
-      printf(p"0x${Hexadecimal(io.out.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out.bits.spike_info.get.inst)}")
-      printf(p" Jump? ${Decimal(io.out.bits.jump)}  ${Hexadecimal(io.out.bits.new_pc)}\n")
+      printf(p"sm ${io.out.bits.spike_info.get.sm_id} warp ${io.out.bits.wid} " +
+             p"0x${Hexadecimal(io.out.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out.bits.spike_info.get.inst)}" +
+             p" Jump? ${Decimal(io.out.bits.jump)}  ${Hexadecimal(io.out.bits.new_pc)}\n")
     }
 }}
 class InstWriteBack extends Bundle{
@@ -66,17 +66,17 @@ class Writeback(num_x:Int,num_v:Int) extends Module{
   //send to operand collector
   if(SPIKE_OUTPUT){
     when(io.out_x.fire/*&&io.out_x.bits.warp_id===wid_to_check.U*/){
-      printf(p"sm ${io.out_x.bits.spike_info.get.sm_id} warp ${Decimal(io.out_x.bits.warp_id)} ")
-      printf(p"0x${Hexadecimal(io.out_x.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out_x.bits.spike_info.get.inst)}")
-      printf(p" x${io.out_x.bits.reg_idxw}  ${Hexadecimal(io.out_x.bits.wb_wxd_rd)}\n")
+      printf(p"sm ${io.out_x.bits.spike_info.get.sm_id} warp ${Decimal(io.out_x.bits.warp_id)} " +
+             p"0x${Hexadecimal(io.out_x.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out_x.bits.spike_info.get.inst)}" +
+             p" x${io.out_x.bits.reg_idxw}  ${Hexadecimal(io.out_x.bits.wb_wxd_rd)}\n")
     }
     when(io.out_v.fire/* && io.out_v.bits.warp_id === wid_to_check.U*/) {
-      printf(p"sm ${io.out_v.bits.spike_info.get.sm_id} warp ${Decimal(io.out_v.bits.warp_id)} ")
-      printf(p"0x${Hexadecimal(io.out_v.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out_v.bits.spike_info.get.inst)}")
-      printf(p" v${io.out_v.bits.reg_idxw} ")
-      printf(p"${Binary(io.out_v.bits.wvd_mask.asUInt)} ")
-      io.out_v.bits.wb_wvd_rd.reverse.foreach(x=>printf(p"${Hexadecimal(x.asUInt)} "))
-      printf(p"\n")
+      printf(p"sm ${io.out_v.bits.spike_info.get.sm_id} warp ${Decimal(io.out_v.bits.warp_id)} " +
+             p"0x${Hexadecimal(io.out_v.bits.spike_info.get.pc)} 0x${Hexadecimal(io.out_v.bits.spike_info.get.inst)}" +
+             p" v${io.out_v.bits.reg_idxw} " +
+             p"${Binary(io.out_v.bits.wvd_mask.asUInt)} " +
+             io.out_v.bits.wb_wvd_rd.reverse.map{ x => p"${Hexadecimal(x.asUInt)} "}.reduceOption(_ + _).getOrElse(p"") +
+             p"\n")
     }
   }
   if(GVM_ENABLED){

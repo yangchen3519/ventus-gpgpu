@@ -204,26 +204,23 @@ class branch_join(val depth_stack: Int) extends Module{
   if (SPIKE_OUTPUT) {
     fetch_ctl.spike_info.get := branch_ctl_buf.bits.spike_info.get
     when(io.complete.valid /*&&io.complete.bits===wid_to_check.U*/ && !io.branch_ctl.fire) {
-      printf(p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}")
+      val log_prefix = p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}"
       when(branch_ctl_buf.bits.opcode === 0.U){
-        printf(p" vbranch     current mask and npc:   ")
-        when(takeif){
-          if_mask.asTypeOf(Vec(num_thread, Bool())).reverse.foreach(x => printf(p"${Hexadecimal(x.asUInt)}"))
-          printf(p"    0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc + 4.U)}")
-        }.otherwise{
-          else_mask.asTypeOf(Vec(num_thread, Bool())).reverse.foreach(x => printf(p"${Hexadecimal(x.asUInt)}"))
-          printf(p"    0x${Hexadecimal(PC_branch)}")
-        }
+        val log_vbranch = (p" vbranch     current mask and npc:   ")
+        val mask = Mux(takeif, if_mask, else_mask)
+        val jumpaddr = Mux(takeif, branch_ctl_buf.bits.spike_info.get.pc + 4.U, PC_branch)
+        val log_mask = mask.asTypeOf(Vec(num_thread, Bool())).reverse.map{x => p"${Hexadecimal(x.asUInt)}"}.reduceOption(_ + _).getOrElse(p"")
+        printf(log_prefix + log_vbranch + log_mask + p" 0x${Hexadecimal(jumpaddr)}, take_if=${takeif}\n")
+      } .otherwise {
+        printf(log_prefix + p"\n")
       }
-      printf(p"\n")
     }
     when(branch_ctl_buf.bits.opcode === 1.U && branch_ctl_buf.valid ) {
-      printf(p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}")
-      printf(p" join    mask and npc:    ")
-      popMask.asTypeOf(Vec(num_thread, Bool())).reverse.foreach(x => printf(p"${Hexadecimal(x.asUInt)}"))
-      printf(p" 0x${Hexadecimal(popPC)}")
-      printf(p" pop stack ? ${Decimal(popjump)}")
-      printf(p"\n")
+      val log = p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}" +
+          p" join    mask and npc:    " + 
+          popMask.asTypeOf(Vec(num_thread, Bool())).reverse.map{x => p"${Hexadecimal(x.asUInt)}"}.reduceOption(_ + _).getOrElse(p"") + 
+          p" 0x${Hexadecimal(popPC)}" + p" pop stack ? ${Decimal(popjump)}\n"
+      printf(log)
     }
 
     //if_mask.asTypeOf(Vec(num_thread, Bool())).reverse.foreach(x => printf(p"${Hexadecimal(x.asUInt)}"))

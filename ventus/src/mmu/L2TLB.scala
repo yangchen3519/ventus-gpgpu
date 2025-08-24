@@ -463,22 +463,18 @@ class L2TLB(
       when(cState === s_check){
         level_cnt_next(i)(accelLevel_pre) := level_cnt(i)(accelLevel_pre) + 1.U
         level_cnt(i) := level_cnt_next(i)
-        printf(p"#${cnt.value} L2#$i MISS ${level_cnt_next(i)(SV.levels)} HIT ${level_cnt_next(i)(0)} AC")
-        level_cnt_next(i).tail.dropRight(1).foreach{ c =>
-          printf(p" $c")
-        }
-        printf("\n")
+        printf(p"#${cnt.value} L2#$i MISS ${level_cnt_next(i)(SV.levels)} HIT ${level_cnt_next(i)(0)} AC" +
+               level_cnt_next(i).tail.dropRight(1).map{ c => p" $c" }.reduceOption(_ + _).getOrElse(p"") +
+               p"\n")
       }
     }
   }
   if(Debug){
     //val total_cnt_next = Wire(Vec(SV.levels+1, UInt(18.W)))
     when(curState.map(_ === s_check).reduce(_ || _)){
-      printf(p"#${cnt.value} L2#T MISS ${total_cnt_next(SV.levels)} HIT ${total_cnt_next(0)} AC")
-      total_cnt_next.tail.dropRight(1).foreach{ c =>
-        printf(p" $c")
-      }
-      printf("\n")
+      printf(p"#${cnt.value} L2#T MISS ${total_cnt_next(SV.levels)} HIT ${total_cnt_next(0)} AC" +
+             total_cnt_next.tail.dropRight(1).map{ c => p" $c" }.reduceOption(_ + _).getOrElse(p"") +
+             p"\n")
     }
     cnt.inc()
   }

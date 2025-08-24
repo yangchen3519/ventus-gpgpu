@@ -371,12 +371,9 @@ class ReplacementUnit(timeLength:Int, way: Int, debug:Boolean=false) extends Mod
   //debug use
   if(debug){
     when(io.validOfSet.asBools.reduce(_ | _) === true.B) {
-      for (i <- 0 until way)
-        printf("%d  ", io.validOfSet(i))
-      printf("\n")
-      for (i <- 0 until way)
-        printf("%d ", io.timeOfSet_st1(way-1-i))
-      printf("\noutput: %d\n", io.waymask_st1)
+      printf(io.validOfSet.asBools.map{ x => p"${x} " }.reduceOption(_ + _).getOrElse(p"") + p"\n" +
+             io.timeOfSet_st1.reverse.map{ x => p"${x} " }.reduceOption(_ + _).getOrElse(p"") +
+             p"\noutput: ${io.waymask_st1}\n")
     }
   }
 }

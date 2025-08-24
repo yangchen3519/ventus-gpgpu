@@ -74,10 +74,10 @@ class Issue extends Module{
     io.out_SIMT.bits.spike_info.get:=inputBuf.bits.ctrl.spike_info.get
 
     when(io.out_warpscheduler.fire/*&&io.out_LSU.bits.ctrl.wid===wid_to_check.U*/){
-      printf(p"sm ${io.out_LSU.bits.ctrl.spike_info.get.sm_id} warp ${Decimal(io.out_LSU.bits.ctrl.wid)} ")
-      printf(p"0x${Hexadecimal(io.out_LSU.bits.ctrl.spike_info.get.pc)} 0x${Hexadecimal(io.out_LSU.bits.ctrl.spike_info.get.inst)}")
-      when(io.out_warpscheduler.bits.ctrl.barrier & !io.out_warpscheduler.bits.ctrl.simt_stack_op){printf(p" barrier\n")}
-      when(io.out_warpscheduler.bits.ctrl.simt_stack_op){printf(p" endprg\n")}
+      val log_prefix = p"sm ${io.out_LSU.bits.ctrl.spike_info.get.sm_id} warp ${Decimal(io.out_LSU.bits.ctrl.wid)} " + 
+        p"0x${Hexadecimal(io.out_LSU.bits.ctrl.spike_info.get.pc)} 0x${Hexadecimal(io.out_LSU.bits.ctrl.spike_info.get.inst)}"
+      when(io.out_warpscheduler.bits.ctrl.barrier & !io.out_warpscheduler.bits.ctrl.simt_stack_op){printf(log_prefix + p" barrier\n")}
+      when(io.out_warpscheduler.bits.ctrl.simt_stack_op){printf(log_prefix + p" endprg\n")}
     }
   }
   io.out_warpscheduler.bits.ctrl:=inputBuf.bits.ctrl

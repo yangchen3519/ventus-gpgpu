@@ -2,7 +2,6 @@
 ifneq ($(words $(CURDIR)),1)
  $(error Unsupported: GNU Make cannot build in directories containing spaces, build elsewhere: '$(CURDIR)')
 endif
-export MAKEFLAGS += +r
 
 RELEASE ?= 0
 

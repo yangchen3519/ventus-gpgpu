@@ -137,9 +137,11 @@ class pipe(val sm_id: Int = 0) extends Module{
   lsu.io.csr_pds:=csrfile.io.lsu_pds
   lsu.io.csr_tid:=csrfile.io.lsu_tid
   lsu.io.csr_numw:=csrfile.io.lsu_numw
-  when(csrfile.io.in.valid && csrfile.io.in.bits.ctrl.custom_signal_0){
-    printf(p"sm ${sm_id} warp ${Decimal(csrfile.io.in.bits.ctrl.wid)} ")
-    printf(p"0x${Hexadecimal(csrfile.io.in.bits.ctrl.pc)} 0x${Hexadecimal(csrfile.io.in.bits.ctrl.inst)}  setrpc 0x${Hexadecimal(csrfile.io.in.bits.in1)} \n")
+  if (SPIKE_OUTPUT) {
+    when(csrfile.io.in.valid && csrfile.io.in.bits.ctrl.custom_signal_0){
+      printf(p"sm ${sm_id} warp ${Decimal(csrfile.io.in.bits.ctrl.wid)} " +
+             p"0x${Hexadecimal(csrfile.io.in.bits.ctrl.pc)} 0x${Hexadecimal(csrfile.io.in.bits.ctrl.inst)}  setrpc 0x${Hexadecimal(csrfile.io.in.bits.in1)} \n")
+    }
   }
 
   warp_sche.io.pc_reset:=io.pc_reset
