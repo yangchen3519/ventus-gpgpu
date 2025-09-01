@@ -210,7 +210,7 @@ if(MMU_ENABLED) {
     UInt((dcache_BlockWords * BytesOfWord).W),
     set = set,
     way = way,
-    shouldReset = false,
+    shouldReset = true,
     holdRead = true,
     singlePort = false,
     bypassWrite = true
