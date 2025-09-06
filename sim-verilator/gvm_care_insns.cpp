@@ -57,6 +57,7 @@
   {0xfc00707f, 0xa4006057, "VMADD_VX_             "},\
   {0xfc00707f, 0x24000057, "VAND_VV_              "},\
   {0xfc00707f, 0x80006057, "VDIVU_VX_             "},\
+  {0xfc00707f, 0x6c004057, "VMSLT_VX_             "},\
   {0xfc00707f, 0x6c001057, "VMFLT_VV_             "},
 
 
@@ -67,6 +68,12 @@
   {0xfe00707f, 0x0000400b, "ENDPRG"             }, 
 
 #define FP32_VREG_INSNS \
+  {0xfc00707f, 0x08001057, "VFSUB_VV_             "},\
+  {0xfc00707f, 0x90001057, "VFMUL_VV_             "},\
+  {0xfc0ff07f, 0x4c001057, "VFSQRT_V_             "},\
+  {0xfc00707f, 0xa0001057, "VFMADD_VV_            "},\
+  {0xfc00707f, 0x18001057, "VFMAX_VV_             "},\
+  {0xfc00707f, 0x00001057, "VFADD_VV_             "},
   
 
 const std::vector<care_insn_t> gvm_t::retire_care_insns = {
@@ -82,7 +89,6 @@ const std::vector<care_insn_t> gvm_t::fp32_vreg_insns = {
 const std::vector<care_insn_t> gvm_t::disasm_table = {
   XREG_INSNS
   VREG_INSNS
-  FP32_VREG_INSNS
   WARP_BARRIER_INSNS
 };
 const std::vector<care_insn_t> gvm_t::barrier_insns = {
