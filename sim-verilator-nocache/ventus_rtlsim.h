@@ -118,6 +118,11 @@ DLL_PUBLIC void ventus_rtlsim_finish(ventus_rtlsim_t* sim, bool snapshot_rollbac
 // If error occurred, calling this function has no effect, you should consider finish the simulation.
 DLL_PUBLIC const ventus_rtlsim_step_result_t* ventus_rtlsim_step(ventus_rtlsim_t* sim);
 
+// Host request GPGPU device to invalidate its Icache
+// (for example, after loading new kernel code to device memory)
+// This will take effect in the next simulation step()
+DLL_PUBLIC void ventus_rtlsim_icache_invalidate(ventus_rtlsim_t* sim);
+
 //
 // Push new kernels to gpu for execution.
 //

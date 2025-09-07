@@ -54,6 +54,7 @@ extern "C" struct ventus_rtlsim_t {
     std::unique_ptr<PhysicalMemory> pmem;
     std::queue<std::unique_ptr<dcache_reqrsp_t>> dcache_queue;
     std::queue<std::unique_ptr<icache_reqrsp_t>> icache_queue;
+    bool need_icache_invalidate = false;
 
     void constructor(const ventus_rtlsim_config_t* config);
     void dut_reset() const;

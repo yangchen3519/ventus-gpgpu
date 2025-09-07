@@ -136,7 +136,7 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
     dut = new Vdut();
     cta = new Cta(logger);
     pmem = std::make_unique<PhysicalMemory>(config.pmem.auto_alloc, config.pmem.pagesize, logger);
-    // pmem_map.clear();
+    need_icache_invalidate = false;
 
     // waveform traces (FST)
     if (config.waveform.enable) {
@@ -227,6 +227,8 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
             uint32_t wg_id = dut->io_host_rsp_bits_inflight_wg_buffer_host_wf_done_wg_id;
             cta->wg_finish(wg_id);
         }
+        dut->io_icache_invalidate = need_icache_invalidate;
+        need_icache_invalidate = false;
     }
 
     //

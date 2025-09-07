@@ -86,6 +86,7 @@ class GPGPU_SimTop extends Module {
     val host_rsp = DecoupledIO(new CTA2host_data)
     val mem = new Mem_SimIO(DATA_BYTE_LEN, ADDR_WIDTH = parameters.MEM_ADDR_WIDTH)
     val cnt = Output(UInt(32.W))
+    val icache_invalidate = Input(Bool())
     //val inst_cnt = if(INST_CNT_2) Output(Vec(num_sm, Vec(2, UInt(32.W)))) else Output(Vec(num_sm, UInt(32.W)))
   })
 
@@ -99,6 +100,7 @@ class GPGPU_SimTop extends Module {
 
   gpgpu.io.out_a <> mem.io.req
   gpgpu.io.out_d <> mem.io.rsp
+  gpgpu.io.icache_invalidate := io.icache_invalidate
   io.mem <> mem.io.mem
 }
 

@@ -24,6 +24,7 @@ class SM_wrapper_nocache(val sm_id: Int = 0) extends Module {
     val icache = new SMIO_icache()(param)
     val dcache_req = DecoupledIO(new DCacheCoreReq_np)
     val dcache_rsp = Flipped(DecoupledIO(new DCacheCoreRsp_np))
+    val icache_invalidate = Input(Bool())
   })
 
   val cta2warp = Module(new CTA2warp)
@@ -56,6 +57,7 @@ class SM_wrapper_nocache(val sm_id: Int = 0) extends Module {
   pipe.io.shared_rsp.bits.activeMask:=sharedmem.io.coreRsp.bits.activeMask
 
   val icache = Module(new InstructionCache()(param))
+  icache.io.invalidate := io.icache_invalidate
   // **** icache coreReq ****
   pipe.io.icache_req.ready:=icache.io.coreReq.ready
   icache.io.coreReq.valid:=pipe.io.icache_req.valid
@@ -90,6 +92,7 @@ class GPGPU_top_nocache() extends Module {
     val icache = Vec(num_sm, new SMIO_icache()(param))
     val dcache_req = Vec(num_sm, DecoupledIO(new DCacheCoreReq_np))
     val dcache_rsp = Vec(num_sm, Flipped(DecoupledIO(new DCacheCoreRsp_np)))
+    val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
   val sm_wrapper_inst = Seq.tabulate(num_sm) { i => Instantiate(new SM_wrapper_nocache(i)) }
@@ -104,6 +107,7 @@ class GPGPU_top_nocache() extends Module {
 
     io.icache(i).req :<>= sm_wrapper(i).icache.req
     sm_wrapper(i).icache.rsp :<>= io.icache(i).rsp
+    sm_wrapper(i).icache_invalidate := io.icache_invalidate
 
     io.dcache_req(i) :<>= sm_wrapper(i).dcache_req
     sm_wrapper(i).dcache_rsp :<>= io.dcache_rsp(i)
