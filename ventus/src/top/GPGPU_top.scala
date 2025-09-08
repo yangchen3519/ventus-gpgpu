@@ -132,6 +132,7 @@ class GPGPU_axi_top extends Module{
   gpgpu_top.io.host_req<>axi_lite_adapter.io.data
   gpgpu_top.io.host_rsp<>axi_lite_adapter.io.rsp
   gpgpu_top.io.cycle_cnt:=0.U
+  gpgpu_top.io.icache_invalidate:=false.B
 }
 class GPGPU_axi_adapter_top extends Module{
   val l2cache_axi_params=AXI4BundleParameters(32,64,log2Up(l2cache_micro.num_sm)+log2Up(l2cache_micro.num_warp)+1)
