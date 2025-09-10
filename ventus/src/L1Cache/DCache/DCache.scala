@@ -210,7 +210,8 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val inflightreadwritemiss_w = (coreReqControl_st0_noen.isWrite && MshrAccess.io.mshrStatus_st0 =/= 0.U) || inflightReadWriteMiss
   // ******     pipeline regs      ******
   coreReq_Q.io.enq.valid := io.coreReq.valid && !probereadAllocateWriteConflict && TagAccess.io.probeRead.ready  && (MshrAccess.io.mshrStatus_st0 =/= 3.U) && (MshrAccess.io.mshrStatus_st0 =/= 1.U) && 
-                            !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty)) && !MshrAccess.io.releasing_stall   
+                            !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty) && coreReq_Q.io.deq.bits.opcode =/= 4.U) && !MshrAccess.io.releasing_stall   
+                            // 这里加入 coreReq_Q.io.deq.bits.opcode =/= 4.U 条件是为了避免当 mshr 此时为空，但是 deq 了一个读导致下个 clk 不为空导致的 invalidate 提前进入问题
   // coreReq_st0_ready 信号用来使能本次的 CoreReq 请求是否用于探测MSHR                            
   // 这里 MshrAccess.io.releasing_stall 其实可以不用考虑，这里只是为了和原来版本对齐
   // 假如没加 MshrAccess.io.releasing_stall 信号，mshrStatus_st0 会返回清楚 MSHR entry 的中间信号，但是因为 coreReq.ready 信号已经与上了 releasing_stall 信号，所以不会出现错误 
@@ -517,7 +518,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   L2flush.a_data := DontCare
   L2flush.spike_info.foreach( _ := DontCare )
 
-  TagAccess.io.invalidateAll := coreReq_st1_valid && coreReqControl_st1_Q.io.deq.bits.isInvalidate && !coreReqTagHasDirty_st1
+  // TagAccess.io.invalidateAll := coreReq_st1_valid && coreReqControl_st1_Q.io.deq.bits.isInvalidate && !coreReqTagHasDirty_st1
   // ******     l1_data_cache::memRsp_pipe0_cycle      ******
   memRsp_Q.io.enq <> io.memRsp
   //val memRsp_st1_ready = Wire(Bool())
