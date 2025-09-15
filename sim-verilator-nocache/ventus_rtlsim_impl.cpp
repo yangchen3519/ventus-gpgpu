@@ -2,6 +2,7 @@
 #include "Vdut.h"
 #include "ventus_rtlsim.h"
 #include "verilated.h"
+#include <algorithm>
 #include <bitset>
 #include <csignal>
 #include <cstdint>
@@ -20,6 +21,32 @@
 #include <sys/wait.h>
 #include <utility>
 #include <vector>
+
+//
+// cleanup at exit
+//
+static std::vector<ventus_rtlsim_t*> g_instances;
+
+// cleanup: mainly for Verilator FST waveform dump
+// tfp->close() is necessary to save complete waveform to file
+//  or the fst file may be corrupted, or lose some data at the end
+//  in this case, a .fst.hier file appears.
+static void cleanup() {
+    for (auto* sim : g_instances) {
+        if (sim->tfp)
+            sim->tfp->close(); // save waveform to file
+        // No need to delete tfp, the process is exiting
+        // delete sim->tfp; // This will cause segfault sometimes, why?
+        sim->tfp = nullptr;
+    }
+    g_instances.clear();
+}
+
+// register cleanup function after g_instances is constructed
+// so that cleanup() is called before g_instances is destructed
+struct CleanupRegister {
+    CleanupRegister() { std::atexit(cleanup); }
+} _cleanup_register;
 
 static volatile std::sig_atomic_t g_aborted = false;
 
@@ -209,6 +236,7 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
     } else {
         tfp = nullptr;
     }
+    g_instances.push_back(this); // for cleanup at exit
 
     // get ready to run
     snapshot_fork(); // initial snapshot at sim_time = 0
@@ -467,7 +495,12 @@ void ventus_rtlsim_t::destructor(bool snapshot_rollback_forcing) {
     delete cta;
     if (tfp)
         delete tfp;
+    dut = nullptr;
+    cta = nullptr;
+    tfp = nullptr;
     delete contextp; // log system use this to get time
+    contextp = nullptr;
+    g_instances.erase(std::remove(g_instances.begin(), g_instances.end(), this), g_instances.end());
 }
 
 void ventus_rtlsim_t::snapshot_fork() {
