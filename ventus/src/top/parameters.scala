@@ -11,7 +11,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   val SPIKE_OUTPUT: Boolean = true
   val INST_CNT: Boolean = true
   val INST_CNT_2: Boolean = false
-  val GVM_ENABLED: Boolean = true
+  val GVM_ENABLED: Boolean = sys.env.getOrElse("RTL_GVM_ENABLED", "false").toBoolean
   val MMU_ENABLED: Boolean = false
   def MMU_ASID_WIDTH = mmu.SV32.asidLen
   val wid_to_check = 2

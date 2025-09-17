@@ -516,7 +516,7 @@ void gvm_t::stepRef() {
       gvmref_step(item.software_wg_id, item.software_warp_id, &gvmref_step_return_info);
       uint32_t next2_gvmref_pc = gvmref_get_next_pc(item.software_wg_id, item.software_warp_id);
       if (next2_gvmref_pc == next_gvmref_pc) {
-        logger->debug(fmt::format("GVM warning: REF PC not advanced after step on sm_id: {}, hardware_warp_id: {}, software_wg_id: {}, software_warp_id: {}. REF next PC before step: 0x{:08x}, after step: 0x{:08x}",
+        logger->debug(fmt::format("GVM info: REF PC not advanced after step on sm_id: {}, hardware_warp_id: {}, software_wg_id: {}, software_warp_id: {}. REF next PC before step: 0x{:08x}, after step: 0x{:08x}",
           item.sm_id, item.hardware_warp_id, item.software_wg_id, item.software_warp_id, next_gvmref_pc, next2_gvmref_pc));
         if (isInsnCare(cur_insn.insn, barrier_insns)) {
           assert(item.barrier_retry == false); // barrier_retry 应当只被置一次
@@ -592,7 +592,7 @@ void gvm_t::stepRef() {
       gvmref_step(item.software_wg_id, item.software_warp_id, &gvmref_step_return_info);
       uint32_t next2_gvmref_pc = gvmref_get_next_pc(item.software_wg_id, item.software_warp_id);
       if (next2_gvmref_pc == next_gvmref_pc) {
-        logger->debug(fmt::format("GVM warning: REF PC not advanced after step on sm_id: {}, hardware_warp_id: {}, software_wg_id: {}, software_warp_id: {}. REF next PC before step: 0x{:08x}, after step: 0x{:08x}",
+        logger->debug(fmt::format("GVM info: REF PC not advanced after step on sm_id: {}, hardware_warp_id: {}, software_wg_id: {}, software_warp_id: {}. REF next PC before step: 0x{:08x}, after step: 0x{:08x}",
           item.sm_id, item.hardware_warp_id, item.software_wg_id, item.software_warp_id, next_gvmref_pc, next2_gvmref_pc));
         logger->error("GVM error: REF PC not advanced after stepping over barrier instruction.");
         assert(0);

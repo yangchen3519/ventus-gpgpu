@@ -6,6 +6,9 @@ endif
 RELEASE ?= 0
 PREFIX ?= $(CURDIR)/install
 GVM_REF_DIR ?= ../../install/lib
+GVM_TRACE ?= 1
+
+export RTL_GVM_ENABLED = true
 
 #=====================================================================
 # Helpers
@@ -99,7 +102,10 @@ endif
 #VLIB_VERILATOR_FLAGS += -Wall
 VLIB_VERILATOR_FLAGS += -Wno-WIDTHEXPAND
 # Make waveforms
-VLIB_VERILATOR_FLAGS += --trace-fst
+ifneq ($(filter 1 yes true on,$(GVM_TRACE)),)
+	VLIB_VERILATOR_FLAGS += --trace-fst
+	VLIB_VERILATOR_FLAGS += --trace-threads $(VLIB_NPROC_TRACE_FST)
+endif
 # Check SystemVerilog assertions
 VLIB_VERILATOR_FLAGS += --assert
 # Generate coverage analysis
@@ -131,7 +137,6 @@ VLIB_LDFLAGS += -fuse-ld=mold
 endif
 
 VLIB_VERILATOR_FLAGS += --threads $(VLIB_NPROC_SIM)
-VLIB_VERILATOR_FLAGS += --trace-threads $(VLIB_NPROC_TRACE_FST)
 VLIB_VERILATOR_FLAGS += -j $(VLIB_NPROC_CPU)
 VLIB_VERILATOR_FLAGS += -CFLAGS "$(VLIB_CXXFLAGS)"
 VLIB_VERILATOR_FLAGS += -LDFLAGS "$(VLIB_LDFLAGS)"
@@ -144,7 +149,6 @@ VLIB_VERILATOR_FLAGS += --prefix Vdut -Mdir $(VLIB_DIR_BUILDOBJ)
 default: lib
 
 $(VLIB_SRC_V): $(VLIB_SRC_SCALA)
-	@sed -i 's/val GVM_ENABLED: Boolean = .*/val GVM_ENABLED: Boolean = true/' $(PARAM_FILE)
 	mkdir -p $(VLIB_SRC_V_DIR)
 	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_SimTop --target chirrtl --target-dir sim-verilator/$(VLIB_SRC_V_DIR)/
 	cd $(VLIB_SRC_V_DIR)/ &&  ~/.cache/llvm-firtool/1.62.0/bin/firtool --split-verilog GPGPU_SimTop.fir -o .
