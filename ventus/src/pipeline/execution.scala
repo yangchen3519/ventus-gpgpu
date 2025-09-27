@@ -527,6 +527,12 @@ class vALUv2(softThread: Int = num_thread, hardThread: Int = num_thread) extends
           result.io.enq.bits.wb_wvd_rd(x) := (~alu(x).out)
         })
       }
+      when(io.in.bits.ctrl.alu_fn===FN_SEQ || io.in.bits.ctrl.alu_fn===FN_SNE ||
+        io.in.bits.ctrl.alu_fn===FN_SGE || io.in.bits.ctrl.alu_fn===FN_SGEU ||
+        io.in.bits.ctrl.alu_fn===FN_SLT || io.in.bits.ctrl.alu_fn===FN_SLTU
+      ){
+        result.io.enq.bits.wb_wvd_rd(x) := alu(x).cmp_out.asUInt
+      }
       when(io.in.bits.ctrl.alu_fn === FN_VID) {
         result.io.enq.bits.wb_wvd_rd(x) := x.asUInt
       }
