@@ -58,7 +58,14 @@
   {0xfc00707f, 0x24000057, "VAND_VV_              "},\
   {0xfc00707f, 0x80006057, "VDIVU_VX_             "},\
   {0xfc00707f, 0x6c004057, "VMSLT_VX_             "},\
-  {0xfc00707f, 0x6c001057, "VMFLT_VV_             "},
+  {0xfc00707f, 0x6c001057, "VMFLT_VV_             "},\
+  {0xfc00707f, 0x2c003057, "VXOR_VI_              "},\
+  {0xfc00707f, 0x08000057, "VSUB_VV_              "},\
+  {0xfc00707f, 0x68004057, "VMSLTU_VX_            "},\
+  {0xfc00707f, 0xa4002057, "VMADD_VV_             "},\
+  {0xfc00707f, 0xa4003057, "VSRA_VI_              "},\
+  {0xfc00707f, 0x74003057, "VMSLE_VI_             "},\
+  {0xfc00707f, 0x08004057, "VSUB_VX_              "},
 
 
 
@@ -73,7 +80,8 @@
   {0xfc0ff07f, 0x4c001057, "VFSQRT_V_             "},\
   {0xfc00707f, 0xa0001057, "VFMADD_VV_            "},\
   {0xfc00707f, 0x18001057, "VFMAX_VV_             "},\
-  {0xfc00707f, 0x00001057, "VFADD_VV_             "},
+  {0xfc00707f, 0x00001057, "VFADD_VV_             "},\
+  
   
 
 const std::vector<care_insn_t> gvm_t::retire_care_insns = {
