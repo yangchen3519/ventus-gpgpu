@@ -192,7 +192,11 @@ clean-lib-dep: clean-lib
 clean-verilated: 
 	-rm -rf $(VLIB_DIR_BUILD)
 
-clean-verilog: clean-verilated
+clean-gvm:
+	-rm -r build/libVentusGVM
+	-rm -r verilog-out
+
+clean-verilog: clean-verilated clean-gvm
 	-rm -f $(VLIB_SRC_V)
 
-.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog info-verilator install
+.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog clean-gvm info-verilator install
