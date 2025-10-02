@@ -74,6 +74,7 @@ struct dut_active_warp_t {
   uint32_t base_dispatch_id; // 本 warp 的首条指令的 dispatch_id
   uint32_t next_retire_dispatch_id; // 下一条应当被 retire 的指令的 id
   bool base_dispatch_id_set; // 是否设置了 base_dispatch_id，初始为 0
+  uint32_t num_thread;
 };
 
 using warp_key_t = std::pair<uint32_t, uint32_t>; // software_wg_id, software_warp_id

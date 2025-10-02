@@ -93,6 +93,7 @@ void gvm_t::getDutWarpNew() {
     // d.vreg_base = item.vgpr_base;
     d.base_dispatch_id_set = 0;
     d.wg_slot_id_in_warp_sche = item.wg_slot_id_in_warp_sche;
+    d.num_thread = item.num_thread_in_warp;
 
     // check if the warp is already in the list
     bool found_sw = false;
@@ -547,7 +548,7 @@ void gvm_t::stepRef() {
             cur_insn.single_insn_cmp.ref_result.vreg_result.reg_idx =
               gvmref_step_return_info.insn_result.vreg_result.reg_idx;
             cur_insn.single_insn_cmp.ref_result.vreg_result.mask =
-              unpack_to_array(gvmref_step_return_info.insn_result.vreg_result.mask, RTL_NUM_THREAD);
+              unpack_to_array(gvmref_step_return_info.insn_result.vreg_result.mask, warp_it->second.num_thread);
             break;
         }
         if (cur_insn.single_insn_cmp.ref_done == 0) {
@@ -642,7 +643,7 @@ int gvm_t::doSingleInsnCmp() {
               assert(insnIt->second.single_insn_cmp.ref_result.insn_type == InsnType::VREG);
               bool mask_same = std::equal(
                 insnIt->second.single_insn_cmp.dut_result.vreg_result.mask.begin(),
-                insnIt->second.single_insn_cmp.dut_result.vreg_result.mask.begin() + RTL_NUM_THREAD,
+                insnIt->second.single_insn_cmp.dut_result.vreg_result.mask.begin() + warpIt->second.num_thread,
                 insnIt->second.single_insn_cmp.ref_result.vreg_result.mask.begin()
               );
               if ((insnIt->second.single_insn_cmp.dut_result.vreg_result.mask
@@ -656,15 +657,15 @@ int gvm_t::doSingleInsnCmp() {
                   warpIt->second.software_warp_id, insnIt->second.dispatch_id, insnIt->second.pc, insnIt->second.insn,
                   insnIt->second.single_insn_cmp.dut_result.vreg_result.reg_idx,
                   insnIt->second.single_insn_cmp.ref_result.vreg_result.reg_idx,
-                  mask_to_string(insnIt->second.single_insn_cmp.dut_result.vreg_result.mask, RTL_NUM_THREAD),
-                  mask_to_string(insnIt->second.single_insn_cmp.ref_result.vreg_result.mask, RTL_NUM_THREAD),
+                  mask_to_string(insnIt->second.single_insn_cmp.dut_result.vreg_result.mask, warpIt->second.num_thread),
+                  mask_to_string(insnIt->second.single_insn_cmp.ref_result.vreg_result.mask, warpIt->second.num_thread),
                   insnIt->second.single_insn_cmp.dut_result.vreg_result.reg_idx,
                   insnIt->second.single_insn_cmp.ref_result.vreg_result.reg_idx
                 ));
                 insnIt->second.single_insn_cmp.cmp_pass = -1;
               } else {
                 bool is_fp32 = isInsnCare(insnIt->second.insn, fp32_vreg_insns);
-                for (int i = 0; i < RTL_NUM_THREAD; i++) {
+                for (int i = 0; i < warpIt->second.num_thread; i++) {
                   if (insnIt->second.single_insn_cmp.dut_result.vreg_result.mask[i]) {
                     if (is_fp32) {
                       float dut_value = *reinterpret_cast<float*>(&insnIt->second.single_insn_cmp.dut_result.vreg_result.rd[i]);

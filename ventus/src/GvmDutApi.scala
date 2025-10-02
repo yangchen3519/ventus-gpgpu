@@ -16,6 +16,7 @@ class GvmDutCta2Warp extends ExtModule with HasExtModuleInline {
     val sgpr_base           = Input(UInt(32.W))     // pad(32)
     val vgpr_base           = Input(UInt(32.W))     // pad(32)
     val wg_slot_id_in_warp_sche = Input(UInt(32.W)) // pad(32)
+    val rtl_num_thread      = Input(UInt(32.W))
   })
 
   setInline("GvmDutCta2Warp.sv",
@@ -30,7 +31,8 @@ class GvmDutCta2Warp extends ExtModule with HasExtModuleInline {
     |  input  wire [31:0] io_hardware_warp_id,
     |  input  wire [31:0] io_sgpr_base,
     |  input  wire [31:0] io_vgpr_base,
-    |  input  wire [31:0] io_wg_slot_id_in_warp_sche
+    |  input  wire [31:0] io_wg_slot_id_in_warp_sche,
+    |  input  wire [31:0] io_rtl_num_thread
     |);
     |
     |  import "DPI-C" function void c_GvmDutCta2Warp(
@@ -40,7 +42,8 @@ class GvmDutCta2Warp extends ExtModule with HasExtModuleInline {
     |    input int hardware_warp_id,
     |    input int sgpr_base,
     |    input int vgpr_base,
-    |    input int wg_slot_id_in_warp_sche
+    |    input int wg_slot_id_in_warp_sche,
+    |    input int rtl_num_thread
     |  );
     |
     |  always @(posedge io_clock) begin
@@ -52,7 +55,8 @@ class GvmDutCta2Warp extends ExtModule with HasExtModuleInline {
     |        io_hardware_warp_id,
     |        io_sgpr_base,
     |        io_vgpr_base,
-    |        io_wg_slot_id_in_warp_sche
+    |        io_wg_slot_id_in_warp_sche,
+    |        io_rtl_num_thread
     |      );
     |    end
     |  end
