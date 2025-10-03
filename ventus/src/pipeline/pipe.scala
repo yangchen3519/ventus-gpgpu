@@ -14,6 +14,7 @@ import L1Cache.ICache._
 import chisel3._
 import chisel3.util._
 import top.parameters._
+import gvm._
 
 class ICachePipeReq_np extends Bundle {
   val addr = UInt(32.W)
@@ -56,6 +57,19 @@ class pipe(val sm_id: Int = 0) extends Module{
   val control=Module(new InstrDecodeV2)
   control.io.sm_id := sm_id.U
   val operand_collector=Module(new operandCollector)
+  if (GVM_ENABLED) {
+    val gvm_xreg = Module(new GvmDutXReg)
+    gvm_xreg.io.clock := clock
+    gvm_xreg.io.sm_id := sm_id.U(32.W)
+    // gvm_xreg.io.num_bank := num_bank.U(32.W)
+    // gvm_xreg.io.num_sgpr_slots := NUMBER_SGPR_SLOTS.U(32.W)
+    val scalar_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_SGPR_SLOTS / num_bank * xLen).W)))
+    for (i <- 0 until num_bank) {
+      scalar_flatten_banks(i) := operand_collector.io.scalarBanks.get(i).asUInt
+    }
+    // println(s"checkwidth${scalar_flatten_banks.asUInt.getWidth}")
+    gvm_xreg.io.xbanks := scalar_flatten_banks.asUInt
+  }
   //val issue=Module(new Issue)
   val issueX = Module(new Issue)
   val issueV = Module(new Issue)

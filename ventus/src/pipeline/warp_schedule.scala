@@ -13,6 +13,7 @@ package pipeline
 import chisel3._
 import chisel3.util._
 import top.parameters._
+import gvm._
 
 class warp_scheduler extends Module{
   val io = IO(new Bundle{
@@ -138,6 +139,18 @@ class warp_scheduler extends Module{
     when((warp_bar_cur(end_wg_id) | (1.U<<end_wf_id).asUInt) === warp_bar_exp(end_wg_id)){
       warp_bar_cur(end_wg_id):=0.U
       warp_bar_data:=warp_bar_data & (~warp_bar_belong(end_wg_id)).asUInt
+      if(GVM_ENABLED) {
+        val bar_fire_cond = (io.warp_control.fire&(!io.warp_control.bits.ctrl.simt_stack_op)) &&
+                    ((warp_bar_cur(end_wg_id) | (1.U<<end_wf_id).asUInt) === warp_bar_exp(end_wg_id))
+        val gvm_bar_done = Module(new GvmDutBarrierDone)
+        gvm_bar_done.io.clock := clock
+        gvm_bar_done.io.bar_done_fire := bar_fire_cond
+        gvm_bar_done.io.sm_id := io.warp_control.bits.ctrl.spike_info.get.sm_id.pad(32)
+        gvm_bar_done.io.wg_slot_id := end_wg_id
+        gvm_bar_done.io.pc := io.warp_control.bits.ctrl.spike_info.get.pc.pad(32)
+        gvm_bar_done.io.inst := io.warp_control.bits.ctrl.spike_info.get.inst.pad(32)
+        gvm_bar_done.io.dispatch_id := io.warp_control.bits.ctrl.spike_info.get.dispatch_id.get
+      }
     }
   }
   // collect endprg in one wg and issue flush request

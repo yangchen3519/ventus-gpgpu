@@ -9,6 +9,9 @@
 #include <verilated_fst_c.h>
 
 extern const std::unordered_map<std::string, int> rtl_parameters;
+#ifdef ENABLE_GVM
+#include "gvm.hpp"
+#endif // ENABLE_GVM
 
 #define SNAPSHOT_WAKEUP_SIGNAL SIGRTMIN
 typedef struct {
@@ -27,6 +30,9 @@ extern "C" struct ventus_rtlsim_t {
     ventus_rtlsim_config_t config;
     ventus_rtlsim_step_result_t step_status;
     std::unique_ptr<PhysicalMemory> pmem;
+#ifdef ENABLE_GVM
+    gvm_t gvm;
+#endif // ENABLE_GVM
     bool need_icache_invalidate = false;
 
     void constructor(const ventus_rtlsim_config_t* config);

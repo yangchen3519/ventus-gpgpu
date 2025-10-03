@@ -202,19 +202,36 @@ class branch_join(val depth_stack: Int) extends Module{
   fetch_ctl_buf.io.enq.valid := fetch_ctl_valid
   io.fetch_ctl <> fetch_ctl_buf.io.deq
   if (SPIKE_OUTPUT) {
-    fetch_ctl.spike_info.get := branch_ctl_buf.bits.spike_info.get
-    when(io.complete.valid /*&&io.complete.bits===wid_to_check.U*/ && !io.branch_ctl.fire) {
-      val log_prefix = p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}"
-      when(branch_ctl_buf.bits.opcode === 0.U){
-        val log_vbranch = (p" vbranch     current mask and npc:   ")
-        val mask = Mux(takeif, if_mask, else_mask)
-        val jumpaddr = Mux(takeif, branch_ctl_buf.bits.spike_info.get.pc + 4.U, PC_branch)
-        val log_mask = mask.asTypeOf(Vec(num_thread, Bool())).reverse.map{x => p"${Hexadecimal(x.asUInt)}"}.reduceOption(_ + _).getOrElse(p"")
-        printf(log_prefix + log_vbranch + log_mask + p" 0x${Hexadecimal(jumpaddr)}, take_if=${takeif}\n")
-      } .otherwise {
-        printf(log_prefix + p"\n")
-      }
+    when (branch_ctl_buf.bits.opcode === 0.U && branch_ctl_buf.fire) {
+      val log_prefix =
+        p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} " +
+        p"warp ${Decimal(branch_ctl_buf.bits.wid)} " +
+        p"0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} " +
+        p"0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}"
+
+      val log_vbranch = p" vbranch     current mask and npc:   "
+      val mask     = Mux(takeif, if_mask, else_mask)
+      val jumpaddr = Mux(takeif, branch_ctl_buf.bits.spike_info.get.pc + 4.U, PC_branch)
+      val log_mask = mask.asTypeOf(Vec(num_thread, Bool())).reverse
+                        .map(x => p"${Hexadecimal(x.asUInt)}")
+                        .reduceOption(_ + _).getOrElse(p"")
+
+      printf(log_prefix + log_vbranch + log_mask +
+            p" 0x${Hexadecimal(jumpaddr)}, take_if=${takeif}, if_mask = ${Binary(if_mask)}\n")
     }
+    fetch_ctl.spike_info.get := branch_ctl_buf.bits.spike_info.get
+    // when(io.complete.valid /*&&io.complete.bits===wid_to_check.U*/ && !io.branch_ctl.fire) {
+    //   val log_prefix = p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}"
+    //   when(branch_ctl_buf.bits.opcode === 0.U){
+    //     val log_vbranch = (p" vbranch     current mask and npc:   ")
+    //     val mask = Mux(takeif, if_mask, else_mask)
+    //     val jumpaddr = Mux(takeif, branch_ctl_buf.bits.spike_info.get.pc + 4.U, PC_branch)
+    //     val log_mask = mask.asTypeOf(Vec(num_thread, Bool())).reverse.map{x => p"${Hexadecimal(x.asUInt)}"}.reduceOption(_ + _).getOrElse(p"")
+    //     printf(log_prefix + log_vbranch + log_mask + p" 0x${Hexadecimal(jumpaddr)}, take_if=${takeif}, if_mask = ${Binary(if_mask)}\n")
+    //   } .otherwise {
+    //     printf(log_prefix + p"\n")
+    //   }
+    // }
     when(branch_ctl_buf.bits.opcode === 1.U && branch_ctl_buf.valid ) {
       val log = p"sm ${branch_ctl_buf.bits.spike_info.get.sm_id} warp ${Decimal(io.complete.bits)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.pc)} 0x${Hexadecimal(branch_ctl_buf.bits.spike_info.get.inst)}" +
           p" join    mask and npc:    " + 

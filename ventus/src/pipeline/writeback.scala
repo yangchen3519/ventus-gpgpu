@@ -12,7 +12,9 @@ package pipeline
 
 import chisel3._
 import chisel3.util._
-import top.parameters.{SPIKE_OUTPUT, wid_to_check, xLen}
+import top.parameters.{SPIKE_OUTPUT, wid_to_check, xLen, GVM_ENABLED}
+import gvm._
+
 class Branch_back extends Module{
   val io = IO(new Bundle{
     val out=DecoupledIO(new BranchCtrl)
@@ -36,6 +38,8 @@ class InstWriteBack extends Bundle{
   val sm_id = UInt(8.W)
   val pc=UInt(xLen.W)
   val inst=UInt(32.W)
+  val dispatch_id = if(GVM_ENABLED) Some(UInt(32.W)) else None // gvm debug val: unique instruction dispatch id
+  val is_extended = if(GVM_ENABLED) Some(Bool()) else None // gvm debug val: whether the instruction is extended
 }
 class Writeback(num_x:Int,num_v:Int) extends Module{
   val io = IO(new Bundle{
@@ -74,5 +78,31 @@ class Writeback(num_x:Int,num_v:Int) extends Module{
              io.out_v.bits.wb_wvd_rd.reverse.map{ x => p"${Hexadecimal(x.asUInt)} "}.reduceOption(_ + _).getOrElse(p"") +
              p"\n")
     }
+  }
+  if(GVM_ENABLED){
+    val gvm_x_wb = Module(new GvmDutXRegWriteback)
+    gvm_x_wb.io.clock := clock
+    gvm_x_wb.io.fire := RegNext(io.out_x.fire) // bit
+    gvm_x_wb.io.sm_id := RegNext(io.out_x.bits.spike_info.get.sm_id.pad(32))
+    gvm_x_wb.io.rd := RegNext(io.out_x.bits.wb_wxd_rd) // int
+    gvm_x_wb.io.is_scalar_wb := RegNext(io.out_x.bits.wxd) // bit
+    gvm_x_wb.io.reg_idx := RegNext(io.out_x.bits.reg_idxw.pad(32))
+    gvm_x_wb.io.hardware_warp_id := RegNext(io.out_x.bits.warp_id.pad(32))
+    gvm_x_wb.io.pc := RegNext(io.out_x.bits.spike_info.get.pc) // int
+    gvm_x_wb.io.inst := RegNext(io.out_x.bits.spike_info.get.inst) // int
+    gvm_x_wb.io.dispatch_id := RegNext(io.out_x.bits.spike_info.get.dispatch_id.get) // int
+
+    val gvm_v_wb = Module(new GvmDutVRegWriteback)
+    gvm_v_wb.io.clock := clock
+    gvm_v_wb.io.fire := io.out_v.fire // bit
+    gvm_v_wb.io.sm_id := io.out_v.bits.spike_info.get.sm_id.pad(32)
+    gvm_v_wb.io.rd := io.out_v.bits.wb_wvd_rd.asUInt // UInt - 向量数据转换为一维信号
+    gvm_v_wb.io.is_vector_wb := io.out_v.bits.wvd // bit - 向量写回使能
+    gvm_v_wb.io.reg_idx := io.out_v.bits.reg_idxw.pad(32)
+    gvm_v_wb.io.hardware_warp_id := io.out_v.bits.warp_id.pad(32)
+    gvm_v_wb.io.pc := io.out_v.bits.spike_info.get.pc // int
+    gvm_v_wb.io.inst := io.out_v.bits.spike_info.get.inst // int
+    gvm_v_wb.io.dispatch_id := io.out_v.bits.spike_info.get.dispatch_id.get // int
+    gvm_v_wb.io.wvd_mask := io.out_v.bits.wvd_mask.asUInt // 向量写回掩码转换为一维信号
   }
 }

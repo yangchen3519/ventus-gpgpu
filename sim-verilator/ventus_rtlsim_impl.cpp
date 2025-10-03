@@ -20,6 +20,8 @@
 #include <sys/wait.h>
 #include <utility>
 
+#include "gvm.hpp"
+
 //
 // cleanup at exit
 //
@@ -142,6 +144,9 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
             sinks.push_back(console_sink);
         }
         logger = std::make_shared<spdlog::logger>("VentusRTLsim_logger", sinks.begin(), sinks.end());
+#ifdef ENABLE_GVM
+        gvm.logger = logger;
+#endif // ENABLE_GVM
         logger->set_level(get_log_level(config.log.level));
         logger->flush_on(spdlog::level::err);
 
@@ -333,6 +338,13 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
     if (!step_status.time_exceed && !step_status.error && contextp->time() % config.snapshot.time_interval == 0) {
         snapshot_fork();
     }
+
+#ifdef ENABLE_GVM
+    if (contextp->time() % 2 == 1) {
+        gvm.getDut();
+        gvm.gvmStep();
+    }
+#endif // ENABLE_GVM
 
     return &step_status;
 }

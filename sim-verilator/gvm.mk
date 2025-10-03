@@ -6,8 +6,10 @@ export MAKEFLAGS += +r
 
 RELEASE ?= 0
 PREFIX ?= $(CURDIR)/install
+GVM_REF_DIR ?= ../../install/lib
+GVM_TRACE ?= 1
 
-export RTL_GVM_ENABLED = false
+export RTL_GVM_ENABLED = true
 
 #=====================================================================
 # Helpers
@@ -34,6 +36,8 @@ VLIB_VERILATOR = $(VERILATOR_ROOT)/bin/verilator
 VLIB_VERILATOR_COVERAGE = $(VERILATOR_ROOT)/bin/verilator_coverage
 endif
 
+VLIB_TOP_MODULE ?= GPGPU_SimTop
+
 CCACHE = $(shell which ccache)
 ifeq ($(CCACHE),)
 CC  = gcc
@@ -49,7 +53,7 @@ MOLD = $(shell which mold)
 #=====================================================================
 
 VLIB_DIR_SCALA = ../ventus/src
-VLIB_DIR_BUILD = build/libVentusRTL
+VLIB_DIR_BUILD = build/libVentusGVM
 VLIB_DIR_BUILDOBJ_DEBUG = $(VLIB_DIR_BUILD)/debug
 VLIB_DIR_BUILDOBJ_RELEASE = $(VLIB_DIR_BUILD)/release
 ifeq ($(RELEASE),1)
@@ -59,15 +63,16 @@ VLIB_DIR_BUILDOBJ = $(VLIB_DIR_BUILDOBJ_DEBUG)
 endif
 
 VLIB_SRC_SCALA = $(shell find $(VLIB_DIR_SCALA) -name "*.scala")
-VLIB_SRC_V = dut.v
-VLIB_SRC_CXX_EXPORT = ventus_rtlsim.cpp # API in these files will be exported to shared library
-VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp rtl_parameters.cpp $(VLIB_SRC_CXX_EXPORT)
+VLIB_SRC_V_DIR = verilog-out
+VLIB_SRC_V = $(VLIB_SRC_V_DIR)/dut.sv
+VLIB_SRC_CXX_EXPORT = ventus_rtlsim.cpp# API in these files will be exported to shared library
+VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp gvm_care_insns.cpp gvm_dpic.cpp gvm.cpp gvm_global_var.cpp $(VLIB_SRC_CXX_EXPORT)
 VLIB_SRC_CXX_ABSPATH = $(abspath $(VLIB_SRC_CXX))
-VLIB_VERILATOR_INPUT = $(VLIB_SRC_V) $(VLIB_SRC_CXX_ABSPATH)
+VLIB_VERILATOR_INPUT = $(wildcard $(VLIB_SRC_V_DIR)/*.sv) $(VLIB_SRC_CXX_ABSPATH)
 VLIB_VERILATOR_OUTPUT = $(VLIB_DIR_BUILDOBJ)/libVdut.a
 #VLIB_VERILATOR_OUTPUT = $(VLIB_DIR_BUILDOBJ)/libVdut.a $(VLIB_DIR_BUILDOBJ)/libverilated.a
 
-VLIB_TARGET_NAME = VentusRTL
+VLIB_TARGET_NAME = VentusGVM
 VLIB_TARGET_PATH = $(VLIB_DIR_BUILDOBJ)
 VLIB_TARGET = $(VLIB_TARGET_PATH)/lib$(VLIB_TARGET_NAME).so
 
@@ -90,22 +95,18 @@ VLIB_VERILATOR_FLAGS += -MMD
 VLIB_VERILATOR_FLAGS += --error-limit 100
 # How to deal with verilog value 'x' and 'z'
 ifeq ($(RELEASE),1)
-VLIB_VERILATOR_FLAGS += --x-assign fast --x-initial unique
+VLIB_VERILATOR_FLAGS += -x-assign fast -x-initial fast
 else
-VLIB_VERILATOR_FLAGS += --x-assign unique --x-initial unique
+VLIB_VERILATOR_FLAGS += -x-assign unique -x-initial unique
 endif
 # Warn about lint issues; may not want this on less solid designs
 #VLIB_VERILATOR_FLAGS += -Wall
 VLIB_VERILATOR_FLAGS += -Wno-WIDTHEXPAND
-VLIB_VERILATOR_FLAGS += -Wno-WIDTHTRUNC
-# Define macros for Verilog
-# random init
-VLIB_VERILATOR_FLAGS += -DPRINTF_COND=1
-VLIB_VERILATOR_FLAGS += -DRANDOMIZE
-VLIB_VERILATOR_FLAGS += -DRANDOMIZE_MEM_INIT
-VLIB_VERILATOR_FLAGS += -DRANDOMIZE_REG_INIT
 # Make waveforms
-VLIB_VERILATOR_FLAGS += --trace-fst
+ifneq ($(filter 1 yes true on,$(GVM_TRACE)),)
+	VLIB_VERILATOR_FLAGS += --trace-fst
+	VLIB_VERILATOR_FLAGS += --trace-threads $(VLIB_NPROC_TRACE_FST)
+endif
 # Check SystemVerilog assertions
 VLIB_VERILATOR_FLAGS += --assert
 # Generate coverage analysis
@@ -114,6 +115,9 @@ VLIB_VERILATOR_FLAGS += --assert
 #VLIB_VERILATOR_FLAGS += --debug
 # Add this trace to get a backtrace in gdb
 #VLIB_VERILATOR_FLAGS += --gdbbt
+# Disable DPI threads to avoid issues with some toolchains
+
+VLIB_VERILATOR_FLAGS += --top-module $(VLIB_TOP_MODULE)
 
 ifeq ($(RELEASE),1)
 VLIB_CFLAGS += -O2 -fvisibility=hidden
@@ -124,13 +128,14 @@ VLIB_CFLAGS += -fPIC
 VLIB_CXXFLAGS += $(VLIB_CFLAGS)
 VLIB_CXXFLAGS += -std=c++20
 VLIB_CXXFLAGS += -DSPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_TRACE
+VLIB_CXXFLAGS += -DENABLE_GVM=1
+#VLIB_CXXFLAGS += -fsanitize=address,undefined
 VLIB_LDFLAGS += -lc
 ifeq ($(MOLD),1)
 VLIB_LDFLAGS += -fuse-ld=mold
 endif
 
 VLIB_VERILATOR_FLAGS += --threads $(VLIB_NPROC_SIM)
-VLIB_VERILATOR_FLAGS += --trace-threads $(VLIB_NPROC_TRACE_FST)
 VLIB_VERILATOR_FLAGS += -j $(VLIB_NPROC_CPU)
 VLIB_VERILATOR_FLAGS += -CFLAGS "$(VLIB_CXXFLAGS)"
 VLIB_VERILATOR_FLAGS += -LDFLAGS "$(VLIB_LDFLAGS)"
@@ -142,11 +147,12 @@ VLIB_VERILATOR_FLAGS += --prefix Vdut -Mdir $(VLIB_DIR_BUILDOBJ)
 
 default: lib
 
-$(VLIB_SRC_V) parameters.json &: $(VLIB_SRC_SCALA)
-	cd .. && ./mill ventus[6.4.0].runMain top.emitVerilog
-	mv GPGPU_SimTop.v $(VLIB_SRC_V)
-rtl_parameters.cpp: parameters.json json2cpp.py
-	python3 json2cpp.py
+$(VLIB_SRC_V): $(VLIB_SRC_SCALA)
+	mkdir -p $(VLIB_SRC_V_DIR)
+	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_SimTop --target chirrtl --target-dir sim-verilator/$(VLIB_SRC_V_DIR)/
+	cd $(VLIB_SRC_V_DIR)/ &&  ~/.cache/llvm-firtool/1.62.0/bin/firtool --split-verilog GPGPU_SimTop.fir -o .
+	mv $(VLIB_SRC_V_DIR)/GPGPU_SimTop.sv $(VLIB_SRC_V)
+	find $(VLIB_SRC_V_DIR) -name "*.sv" -type f -exec sed -i '1i\`define PRINTF_COND 1' {} \;
 
 verilog: $(VLIB_SRC_V)
 
@@ -162,8 +168,9 @@ $(VLIB_TARGET): $(VLIB_VERILATOR_OUTPUT)
 	$(CXX) $(VLIB_CXXFLAGS) $(VLIB_LDFLAGS) -shared -o $@ \
 	  $(VLIB_OBJ_EXPORT) \
 	  $(VLIB_DIR_BUILDOBJ)/libVdut.a $(VLIB_DIR_BUILDOBJ)/libverilated.a \
-	  -lspdlog -lfmt -pthread -lpthread -lz -latomic  
-	ln -sf $(abspath $(VLIB_TARGET)) $(VLIB_DIR_BUILD)/libVentusRTL.so
+	  -lspdlog -lfmt -pthread -lpthread -lz -latomic \
+		-lgvmref -L$(GVM_REF_DIR) 
+	ln -sf $(abspath $(VLIB_TARGET)) $(VLIB_DIR_BUILD)/libVentusGVM.so
 
 lib: $(VLIB_TARGET)
 
@@ -194,11 +201,9 @@ clean-lib-dep: clean-lib
 clean-verilated: 
 	-rm -rf $(VLIB_DIR_BUILD)
 
-clean-gvm:
-	-rm -r build/libVentusGVM
-	-rm -r verilog-out
+clean-verilog: clean-verilated
+	-rm -r $(VLIB_SRC_V_DIR)
 
-clean-verilog: clean-verilated clean-gvm
-	-rm -f $(VLIB_SRC_V)
+clean: clean-verilog clean-verilated
 
-.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog clean-gvm info-verilator install
+.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog info-verilator install

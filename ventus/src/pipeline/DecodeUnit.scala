@@ -615,7 +615,13 @@ class InstrDecodeV2 extends Module {
       c.spike_info.get.sm_id := io.sm_id
       c.spike_info.get.inst := io.inst(i)
       c.spike_info.get.pc := io.pc+ (i.U << 2.U)
+      if (GVM_ENABLED) {
+        c.spike_info.get.dispatch_id.get := 0.U
+        c.spike_info.get.is_extended.get := regextInfo(i).isExt || regextInfo(i).isExtI
+      }
     }
+    require(!(GVM_ENABLED && !SPIKE_OUTPUT), "GVM requires spike_info to run!\n")
+
     c.atomic :=s(26)
     c.aq :=s(26) & io.inst(i)(26)
     c.rl:=s(26) & io.inst(i)(25)

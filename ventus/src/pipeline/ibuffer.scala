@@ -13,6 +13,8 @@ package pipeline
 import chisel3._
 import chisel3.util._
 import top.parameters._
+import freechips.rocketchip.tilelink.TLMessages.d
+import gvm._
 
 
 
@@ -147,12 +149,18 @@ class InstrBufferV2 extends Module{
     val ptr = PriorityEncoder(mask_reg)
 
     val mask_next = mask_reg & (~(1.U << ptr)(num_fetch-1, 0)).asUInt
+    
+    val dispatchCounter = RegInit(1.U(32.W)) // GVM DUT: unique instruction dispatch id
+
     when(io.flush){
       mask_reg := 0.U
       control_reg := 0.U.asTypeOf(control_reg)
     }.otherwise{
       when(io.out.fire) {
         mask_reg := mask_next
+        if (GVM_ENABLED) {
+          dispatchCounter := dispatchCounter + 1.U
+        }
       }
       when(io.in.fire){
         mask_reg := io.in.bits.control_mask.asUInt // cover io.out.fire
@@ -162,6 +170,10 @@ class InstrBufferV2 extends Module{
     io.in.ready := mask_next === 0.U && io.out.ready
     io.out.valid := mask_reg =/= 0.U
     io.out.bits := control_reg(ptr)
+    if (GVM_ENABLED) {
+      io.out.bits.spike_info.get.dispatch_id.get := dispatchCounter
+      // the first instruction's id is 1 instead of 0
+    }
   }
   val slowDownArray = Seq.fill(num_warp)(Module(new SlowDown))
   (0 until num_warp).foreach{ i =>
@@ -174,6 +186,20 @@ class InstrBufferV2 extends Module{
 
     io.out(i) <> slowDownArray(i).io.out
   }
+  
+  if (GVM_ENABLED) {
+    val gvm_dispatch = Module(new GvmDutInsnDispatch)
+    // 共有 num_warp 个 dispatch 通道
+    gvm_dispatch.io.clock := clock
+    gvm_dispatch.io.dispatch_fire := VecInit(io.out.map(_.fire.asUInt)).asUInt
+    gvm_dispatch.io.sm_id := VecInit(io.out.map(_.bits.spike_info.get.sm_id.pad(32))).asUInt
+    gvm_dispatch.io.hardware_warp_id := VecInit.tabulate(num_warp)(i => i.U(32.W)).asUInt
+    gvm_dispatch.io.pc := VecInit(io.out.map(_.bits.spike_info.get.pc.asUInt)).asUInt
+    gvm_dispatch.io.instr := VecInit(io.out.map(_.bits.spike_info.get.inst.asUInt)).asUInt
+    gvm_dispatch.io.dispatch_id := VecInit(io.out.map(_.bits.spike_info.get.dispatch_id.get.asUInt)).asUInt
+    gvm_dispatch.io.is_extended := VecInit(io.out.map(_.bits.spike_info.get.is_extended.get)).asUInt
+  }
+  
 }
 
 class IBuffer2OpC extends Module{

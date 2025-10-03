@@ -14,9 +14,9 @@ class WriteVecCtrl extends Bundle{
   val spike_info=if(SPIKE_OUTPUT) Some(new InstWriteBack) else None
 }
 class WriteScalarCtrl extends Bundle{
-  val wb_wxd_rd=(UInt(xLen.W))
-  val wxd=Bool()
-  val reg_idxw=UInt((regidx_width + regext_width).W)
+  val wb_wxd_rd=(UInt(xLen.W)) // writeback write scalar destination rd data
+  val wxd=Bool() // write is scalar destination
+  val reg_idxw=UInt((regidx_width + regext_width).W) // reg index wide
   val warp_id=UInt(depth_warp.W)
   val spike_info=if(SPIKE_OUTPUT) Some(new InstWriteBack) else None
 }
@@ -524,11 +524,17 @@ class operandCollector extends Module{
     val writeVecCtrl=Flipped(DecoupledIO(new WriteVecCtrl))
     val sgpr_base = Input(Vec(num_warp,UInt((SGPR_ID_WIDTH+1).W)))
     val vgpr_base = Input(Vec(num_warp,UInt((VGPR_ID_WIDTH+1).W)))
+    val scalarBanks = if (GVM_ENABLED) Some(Output(Vec(num_bank, Vec(NUMBER_SGPR_SLOTS / num_bank, UInt(xLen.W))))) else None
   })
   val collectorUnits = VecInit(Seq.fill(num_collectorUnit)(Module(new collectorUnit).io))
   val Arbiter = Module(new operandArbiter)
   val vectorBank = VecInit(Seq.fill(num_bank)(Module(new FloatRegFileBank).io))
   val scalarBank = VecInit(Seq.fill(num_bank)(Module(new RegFileBank).io))
+  if (GVM_ENABLED) {
+    (0 until num_bank).foreach(i => {
+       io.scalarBanks.get(i) := scalarBank(i).all_regs.get
+    })
+  }
   val crossBar = Module(new crossBar)
   val Demux = Module(new instDemux)
   // connecting Arbiters and banks
