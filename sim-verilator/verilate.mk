@@ -195,8 +195,8 @@ clean-verilated:
 	-rm -rf $(VLIB_DIR_BUILD)
 
 clean-gvm:
-	-rm -r build/libVentusGVM
-	-rm -r verilog-out
+	-rm -rf build/libVentusGVM
+	-rm -rf verilog-out
 
 clean-verilog: clean-verilated clean-gvm
 	-rm -f $(VLIB_SRC_V)

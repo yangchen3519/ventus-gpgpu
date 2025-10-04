@@ -114,3 +114,8 @@ object emitVerilog extends App {
   ParametersToJson.saveToJson("sim-verilator/parameters.json")
 }
 
+object paramToJson extends App {
+  import top.ParametersToJson
+  ParametersToJson.saveToJson("sim-verilator/parameters.json")
+}
+

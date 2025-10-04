@@ -66,7 +66,7 @@ VLIB_SRC_SCALA = $(shell find $(VLIB_DIR_SCALA) -name "*.scala")
 VLIB_SRC_V_DIR = verilog-out
 VLIB_SRC_V = $(VLIB_SRC_V_DIR)/dut.sv
 VLIB_SRC_CXX_EXPORT = ventus_rtlsim.cpp# API in these files will be exported to shared library
-VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp gvm_care_insns.cpp gvm_dpic.cpp gvm.cpp gvm_global_var.cpp $(VLIB_SRC_CXX_EXPORT)
+VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp rtl_parameters.cpp gvm_care_insns.cpp gvm_dpic.cpp gvm.cpp gvm_global_var.cpp $(VLIB_SRC_CXX_EXPORT)
 VLIB_SRC_CXX_ABSPATH = $(abspath $(VLIB_SRC_CXX))
 VLIB_VERILATOR_INPUT = $(wildcard $(VLIB_SRC_V_DIR)/*.sv) $(VLIB_SRC_CXX_ABSPATH)
 VLIB_VERILATOR_OUTPUT = $(VLIB_DIR_BUILDOBJ)/libVdut.a
@@ -95,13 +95,20 @@ VLIB_VERILATOR_FLAGS += -MMD
 VLIB_VERILATOR_FLAGS += --error-limit 100
 # How to deal with verilog value 'x' and 'z'
 ifeq ($(RELEASE),1)
-VLIB_VERILATOR_FLAGS += -x-assign fast -x-initial fast
+VLIB_VERILATOR_FLAGS += --x-assign fast --x-initial unique
 else
-VLIB_VERILATOR_FLAGS += -x-assign unique -x-initial unique
+VLIB_VERILATOR_FLAGS += --x-assign unique --x-initial unique
 endif
 # Warn about lint issues; may not want this on less solid designs
 #VLIB_VERILATOR_FLAGS += -Wall
 VLIB_VERILATOR_FLAGS += -Wno-WIDTHEXPAND
+VLIB_VERILATOR_FLAGS += -Wno-WIDTHTRUNC
+# Define macros for Verilog
+# random init
+VLIB_VERILATOR_FLAGS += -DPRINTF_COND=1
+# VLIB_VERILATOR_FLAGS += -DRANDOMIZE
+# VLIB_VERILATOR_FLAGS += -DRANDOMIZE_MEM_INIT
+# VLIB_VERILATOR_FLAGS += -DRANDOMIZE_REG_INIT
 # Make waveforms
 ifneq ($(filter 1 yes true on,$(GVM_TRACE)),)
 	VLIB_VERILATOR_FLAGS += --trace-fst
@@ -136,6 +143,8 @@ VLIB_LDFLAGS += -fuse-ld=mold
 endif
 
 VLIB_VERILATOR_FLAGS += --threads $(VLIB_NPROC_SIM)
+VLIB_VERILATOR_FLAGS += --threads-dpi none
+VLIB_VERILATOR_FLAGS += --trace-threads $(VLIB_NPROC_TRACE_FST)
 VLIB_VERILATOR_FLAGS += -j $(VLIB_NPROC_CPU)
 VLIB_VERILATOR_FLAGS += -CFLAGS "$(VLIB_CXXFLAGS)"
 VLIB_VERILATOR_FLAGS += -LDFLAGS "$(VLIB_LDFLAGS)"
@@ -147,12 +156,16 @@ VLIB_VERILATOR_FLAGS += --prefix Vdut -Mdir $(VLIB_DIR_BUILDOBJ)
 
 default: lib
 
-$(VLIB_SRC_V): $(VLIB_SRC_SCALA)
+$(VLIB_SRC_V) parameters.json &: $(VLIB_SRC_SCALA)
 	mkdir -p $(VLIB_SRC_V_DIR)
+	cd .. && ./mill ventus[6.4.0].runMain top.paramToJson
 	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_SimTop --target chirrtl --target-dir sim-verilator/$(VLIB_SRC_V_DIR)/
-	cd $(VLIB_SRC_V_DIR)/ &&  ~/.cache/llvm-firtool/1.62.0/bin/firtool --split-verilog GPGPU_SimTop.fir -o .
+	cd $(VLIB_SRC_V_DIR)/ && firtool --split-verilog GPGPU_SimTop.fir -o .
 	mv $(VLIB_SRC_V_DIR)/GPGPU_SimTop.sv $(VLIB_SRC_V)
 	find $(VLIB_SRC_V_DIR) -name "*.sv" -type f -exec sed -i '1i\`define PRINTF_COND 1' {} \;
+
+rtl_parameters.cpp: parameters.json json2cpp.py
+	python3 json2cpp.py
 
 verilog: $(VLIB_SRC_V)
 

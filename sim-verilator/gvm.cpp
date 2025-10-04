@@ -203,6 +203,12 @@ void gvm_t::getDutInsnFinish() {
 }
 void gvm_t::getDutXRegWbFinish() {
   for (const auto& item : g_xreg_wb_data) {
+    if (!isInsnCare(item.insn, retire_care_insns)) {
+      logger->error("GVM error in `gvm_t::getDutXRegWbFinish`: "
+        "xreg writeback for instruction that does not care for retire\n"
+        "getDutXRegWbFinish Error: sm_id: {}, hardware_warp_id: {}, dispatch_id: {}, pc: 0x{:08x}, insn: 0x{:08x}",
+        item.sm_id, item.hardware_warp_id, item.dispatch_id, item.pc, item.insn);
+    }
     assert(isInsnCare(item.insn, retire_care_insns));
     assert(!isInsnCare(item.insn, barrier_insns));
     assert(!isInsnCare(item.insn, single_insn_cmp_care_insns));
