@@ -182,7 +182,7 @@ $(VLIB_TARGET): $(VLIB_VERILATOR_OUTPUT)
 	  $(VLIB_OBJ_EXPORT) \
 	  $(VLIB_DIR_BUILDOBJ)/libVdut.a $(VLIB_DIR_BUILDOBJ)/libverilated.a \
 	  -lspdlog -lfmt -pthread -lpthread -lz -latomic \
-		-lgvmref -L$(GVM_REF_DIR) 
+	  -lgvmref -L$(GVM_REF_DIR) -Wl,--enable-new-dtags -Wl,-rpath,'$$ORIGIN'
 	ln -sf $(abspath $(VLIB_TARGET)) $(VLIB_DIR_BUILD)/libVentusGVM.so
 
 lib: $(VLIB_TARGET)

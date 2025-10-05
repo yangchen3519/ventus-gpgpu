@@ -22,6 +22,8 @@
 
 #include "gvm.hpp"
 
+constexpr uint64_t HALF_CYCLE_TIME = 5;
+
 //
 // cleanup at exit
 //
@@ -168,7 +170,6 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
     }
 
     // init Verilator simulation context
-    // contextp = new VerilatedContext;
     contextp = new VerilatedContext;
     contextp->debug(0);
     contextp->randReset(0);
@@ -231,7 +232,7 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
     //
     // clock step
     //
-    contextp->timeInc(1);
+    contextp->timeInc(HALF_CYCLE_TIME);
     dut->clock = !dut->clock;
 
     //
@@ -528,22 +529,22 @@ void ventus_rtlsim_t::dut_reset() const {
     dut->eval();
     waveform_dump();
 
-    contextp->timeInc(1);
+    contextp->timeInc(HALF_CYCLE_TIME);
     dut->clock = 1;
     dut->eval();
     waveform_dump();
 
-    contextp->timeInc(1);
+    contextp->timeInc(HALF_CYCLE_TIME);
     dut->clock = 0;
     dut->eval();
     waveform_dump();
 
-    contextp->timeInc(1);
+    contextp->timeInc(HALF_CYCLE_TIME);
     dut->clock = 1;
     dut->eval();
     waveform_dump();
 
-    contextp->timeInc(1);
+    contextp->timeInc(HALF_CYCLE_TIME);
     dut->clock = 0;
     dut->reset = 0;
     dut->eval();
