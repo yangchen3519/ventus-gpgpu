@@ -334,7 +334,7 @@ object IDecodeLUT_V{
     VMSLEU_VI-> List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_IMM,IMM_Z,MEM_X,FN_SGEU,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
     VMSLEU_VX-> List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_RS1,IMM_X,MEM_X,FN_SGEU,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
     VMSLE_VV->  List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_VRS1,IMM_X,MEM_X,FN_SGE,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
-    VMSLE_VI->  List(Y,N,N,B_N,N,N,CSR.N,Y,A3_X,A2_VRS2,A1_IMM,IMM_V,MEM_X,FN_SGE,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),//VMSLE_VI->  List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_IMM,IMM_V,MEM_X,FN_SGE,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
+    VMSLE_VI->  List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_IMM,IMM_V,MEM_X,FN_SGE,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
     VMSLE_VX->  List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_RS1,IMM_X,MEM_X,FN_SGE,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
     VMSGTU_VI-> List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_IMM,IMM_Z,MEM_X,FN_SLTU,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
     VMSGTU_VX-> List(Y,N,N,B_N,N,N,CSR.N,N,A3_X,A2_VRS2,A1_VRS1,IMM_X,MEM_X,FN_SLTU,N,M_X,N,N,N,Y,N,Y,N,N,N,N,N),
@@ -615,7 +615,13 @@ class InstrDecodeV2 extends Module {
       c.spike_info.get.sm_id := io.sm_id
       c.spike_info.get.inst := io.inst(i)
       c.spike_info.get.pc := io.pc+ (i.U << 2.U)
+      if (GVM_ENABLED) {
+        c.spike_info.get.dispatch_id.get := 0.U
+        c.spike_info.get.is_extended.get := regextInfo(i).isExt || regextInfo(i).isExtI
+      }
     }
+    require(!(GVM_ENABLED && !SPIKE_OUTPUT), "GVM requires spike_info to run!\n")
+
     c.atomic :=s(26)
     c.aq :=s(26) & io.inst(i)(26)
     c.rl:=s(26) & io.inst(i)(25)

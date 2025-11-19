@@ -63,6 +63,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val tagFromCore_tA_st1  = Output(UInt(dcache_TagBits.W))
     val asidFromCore_tA_st1 = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
     val coreReq_Control_st1 = Output(new DCacheControl)
+    val perLaneAddr_st1     = Output(Vec(NLanes, new DCachePerLaneAddr))
     val read_Req_dA         = ValidIO(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
     val CacheHit_st1        = Output(Bool())
     val Req_st1_RTAB        = ValidIO(new RTABReq())
@@ -225,6 +226,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   if(MMU_ENABLED){
     io.asidFromCore_tA_st1.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
   }
+  io.perLaneAddr_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   io.read_Req_dA.bits.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
@@ -394,7 +396,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //st1 ready
   st1_ready := false.B
-  when(!(Req_RTAB_st1_valid || ReplayType === UCReqHitDirty)) { // when not request RTAB
+  when(!(Req_RTAB_st1_valid || ReplayType === UCacheHitDirty)) { // when not request RTAB
     when(Control_st1.isRead || Control_st1.isWrite) {
       when(io.tA_Hit_st1.hit) {
           when(CoreRsp_pipeReg_st1_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition

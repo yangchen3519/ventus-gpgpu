@@ -116,6 +116,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   TagAccess.io.probeIsWrite_st1.get       := coreReqPipe.io.coreReq_Control_st1.isWrite
   TagAccess.io.probeIsUncache_st1       := coreReqPipe.io.coreReq_Control_st1.isUncached
   TagAccess.io.tagready_st1    := coreReqPipe.io.st1_ready
+  TagAccess.io.perLaneAddr_st1 := coreReqPipe.io.perLaneAddr_st1
   if(MMU_ENABLED){
     TagAccess.io.asidFromCore_st1.get := coreReqPipe.io.asidFromCore_tA_st1.get
   }

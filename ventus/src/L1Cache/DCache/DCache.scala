@@ -16,7 +16,6 @@ import SRAMTemplate._
 import chisel3._
 import chisel3.util._
 import config.config.Parameters
-import firrtl.Utils._
 import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_WordOffsetBits, num_block, num_thread}
 import mmu.SV32.{asidLen, paLen, vaLen}
 //import pipeline.parameters._
@@ -348,11 +347,15 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val inflightReadWriteMiss = RegInit(false.B)
   val inflightreadwritemiss_w = (coreReqControl_st0_noen.isWrite && MshrAccess.io.mshrStatus_st0 =/= 0.U) || inflightReadWriteMiss
   // ******     pipeline regs      ******
-  coreReq_Q.io.enq.valid := io.coreReq.valid && !probereadAllocateWriteConflict && TagAccess.io.probeRead.ready  && (MshrAccess.io.mshrStatus_st0 =/= 3.U) && (MshrAccess.io.mshrStatus_st0 =/= 1.U) && (MshrAccess.io.mshrStatus_st0 =/= 4.U)
-  val coreReq_st0_ready =  coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w &&
-    //!readmiss_sameadd && TagAccess.io.probeRead.ready &&
-    (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && (MshrAccess.io.mshrStatus_st0 =/= 4.U)
-  io.coreReq.ready := coreReq_st0_ready//coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w &&  !readmiss_sameadd && TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U)
+  coreReq_Q.io.enq.valid := io.coreReq.valid && !probereadAllocateWriteConflict && TagAccess.io.probeRead.ready  && (MshrAccess.io.mshrStatus_st0 =/= 3.U) && (MshrAccess.io.mshrStatus_st0 =/= 1.U) && 
+                            !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty) ) && !MshrAccess.io.releasing_stall   
+  // coreReq_st0_ready 信号用来使能本次的 CoreReq 请求是否用于探测MSHR                            
+  // 这里 MshrAccess.io.releasing_stall 其实可以不用考虑，这里只是为了和原来版本对齐
+  // 假如没加 MshrAccess.io.releasing_stall 信号，mshrStatus_st0 会返回清楚 MSHR entry 的中间信号，但是因为 coreReq.ready 信号已经与上了 releasing_stall 信号，所以不会出现错误 
+  val readmiss_sameadd = Wire(Bool())
+  val coreReq_st0_ready =  coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w && !readmiss_sameadd && TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !MshrAccess.io.releasing_stall
+  io.coreReq.ready := coreReq_Q.io.enq.ready && !probereadAllocateWriteConflict && !inflightreadwritemiss_w &&  !readmiss_sameadd &&
+    TagAccess.io.probeRead.ready && (MshrAccess.io.mshrStatus_st0 =/= 3.U)&& (MshrAccess.io.mshrStatus_st0 =/= 1.U) && !(io.coreReq.bits.opcode === 3.U && (!MshrAccess.io.empty)) && !MshrAccess.io.releasing_stall
   coreReq_Q.io.enq.bits := io.coreReq.bits
 
   val coreReq_st1 = coreReq_Q.io.deq.bits
@@ -361,7 +364,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val coreReq_st1_valid = Wire(Bool())
   //val memRsp_st1_valid = RegInit(false.B)//early definition
   //secondaryFullReturn时cReq_st1可以valid，也可以fire。是missRspOut期间唯一例外
-  val secondaryFullReturn = RegNext(MshrAccess.io.probeOut_st1.probeStatus === 4.U)
+  val secondaryFullReturn = RegNext(MshrAccess.io.probeOut_st1.probeStatus === 4.U, false.B)
   val coreReqControl_st0 = Wire(new DCacheControl)
 
   //val coreReqControl_st1: DCacheControl = RegEnable(coreReqControl_st0,io.coreReq.fire())
@@ -389,9 +392,8 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   readHit_st2_valid :=  readHit_st2.io.deq.fire && readHit_st2.io.deq.bits.asUInt.asBool
 
   //val readHit_st2 = RegNext(readHit_st1 )
-  val injectTagProbe = inflightReadWriteMiss ^ RegNext(inflightReadWriteMiss)//RegInit(false.B)//inflightReadWriteMiss && (mshrProbeStatus === 0.U)
-  //when read miss st0 and st1 target to the same block, mshr is not updated
-  readmiss_st0_st1_match := MshrAccess.io.missReq.valid && (MshrAccess.io.probe.bits.blockAddr === MshrAccess.io.missReq.bits.blockAddr) &&
+  val injectTagProbe = inflightReadWriteMiss ^ RegNext(inflightReadWriteMiss, false.B)//RegInit(false.B)//inflightReadWriteMiss && (mshrProbeStatus === 0.U)
+  readmiss_sameadd := MshrAccess.io.missReq.valid && (MshrAccess.io.probe.bits.blockAddr === MshrAccess.io.missReq.bits.blockAddr) &&
     io.coreReq.valid  && coreReq_Q.io.deq.valid
   // ******      l1_data_cache::coreReq_pipe0_cycle      ******
   coreReq_Q.io.deq.ready := coreReq_st1_ready &&
@@ -434,11 +436,12 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
     coreReq_Q.io.deq.bits.opcode === 3.U && coreReq_Q.io.deq.bits.param =/= 2.U
   coreReqInvOrFluValid_st1 := coreReq_st1_valid &&
     (coreReqControl_st1_Q.io.deq.bits.isInvalidate || coreReqControl_st1_Q.io.deq.bits.isFlush)
-  val coreReqInv_st1: Bool = coreReqControl_st1_Q.io.deq.bits.isInvalidate
-  //TagAccess.io.flushChoosen.get.valid := (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
-  //  TagAccess.io.hasDirty_st0.get//TODO add LRSC cond
-  //TagAccess.io.flushChoosen.get.bits := //TODO add LRSC cond
-  //  Cat(TagAccess.io.dirtySetIdx_st0.get,TagAccess.io.dirtyWayMask_st0.get)
+  // val coreReqInv_st1: Bool = coreReqControl_st1_Q.io.deq.bits.isInvalidate
+  // 上面这个定义没有被使用，这里去掉
+  TagAccess.io.flushChoosen.get := (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
+    TagAccess.io.hasDirty_st0.get//TODO add LRSC cond
+  // TagAccess.io.flushChoosen.get.bits := //TODO add LRSC cond
+    Cat(TagAccess.io.dirtySetIdx_st0.get,TagAccess.io.dirtyWayMask_st0.get)
   val DataAccessInvOrFluSRAMRReq = Wire(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
   val dataAccessInvOrFluRValid = (coreReqInvOrFluValid_st0 || coreReqInvOrFluValid_st1) &&
     TagAccess.io.hasDirty_st0.get//same to TagAccess.io.flushChoosen.get.valid
@@ -651,7 +654,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   L2flush.a_data := DontCare
   L2flush.spike_info.foreach( _ := DontCare )
 
-  TagAccess.io.invalidateAll := coreReq_st1_valid && coreReqControl_st1_Q.io.deq.bits.isInvalidate && !coreReqTagHasDirty_st1
+  // TagAccess.io.invalidateAll := coreReq_st1_valid && coreReqControl_st1_Q.io.deq.bits.isInvalidate && !coreReqTagHasDirty_st1
   // ******     l1_data_cache::memRsp_pipe0_cycle      ******
   memRsp_Q.io.enq <> io.memRsp
   //val memRsp_st1_ready = Wire(Bool())
@@ -709,13 +712,13 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   }
 
   val missRspSetIdx_st1 = memRsp_st1.d_source(SetIdxBits-1,0)
-  val dataReplaceReadValid = RegNext(TagAccess.io.allocateWrite.valid) &&
+  val dataReplaceReadValid = RegNext(TagAccess.io.allocateWrite.valid, false.B) &&
     tagReplaceStatus === false.B &&
     TagAccess.io.needReplace.get
   val DataAccessReplaceReadSRAMRReq = Wire(Vec(BlockWords, new SRAMBundleA(NSets * NWays)))
   DataAccessReplaceReadSRAMRReq.foreach(_.setIdx := Cat(missRspSetIdx_st1,OHToUInt(TagAccess.io.waymaskReplacement_st1)))
 
-  val dataFillVaild = RegNext(TagAccess.io.allocateWrite.valid) &&
+  val dataFillVaild = RegNext(TagAccess.io.allocateWrite.valid, false.B) &&
     tagReplaceStatus === false.B &&
     !TagAccess.io.needReplace.get//This place diff from dataReplaceReadValid
   val DataAccessMissRspSRAMWReq: Vec[SRAMBundleAW[UInt]] = Wire(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
@@ -762,7 +765,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   if(MMU_ENABLED){
     TagAccess.io.allocateWriteAsid_st1.get := MshrAccess.io.missRspOutAsid.get
   }
-  TagAccess.io.allocateWriteTagSRAMWValid_st1 := RegNext(TagAccess.io.allocateWrite.valid) && tagAllocateWriteReady
+  TagAccess.io.allocateWriteTagSRAMWValid_st1 := RegNext(TagAccess.io.allocateWrite.valid, false.B) && tagAllocateWriteReady
 
   // ******     DataAccess      ******
   //val DataFromCrsbarOrMemRspQ = Wire(Vec(BlockWords, UInt(WordLength.W)))
@@ -778,7 +781,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
     DataAccess.io.w.req.valid := Mux(dataFillVaild,
       true.B,  //READ miss resp
       writeHit_st1 & getBankEn.io.perBankValid(i))       //WRITE hit
-    DataAccess.io.w.req.bits := Mux(RegNext(memRsp_Q.io.deq.valid && memRspIsRead),DataAccessMissRspSRAMWReq(i),DataAccessWriteHitSRAMWReq(i))
+    DataAccess.io.w.req.bits := Mux(RegNext(memRsp_Q.io.deq.valid && memRspIsRead, false.B),DataAccessMissRspSRAMWReq(i),DataAccessWriteHitSRAMWReq(i))
     DataAccess.io.r.req.valid := readHit_st1 || dataReplaceReadValid || dataAccessInvOrFluRValid
     when(dataReplaceReadValid){
       DataAccess.io.r.req.bits := DataAccessReplaceReadSRAMRReq(i)
@@ -794,7 +797,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   val coreRsp_st2_dataMemOrder = Wire(Vec(BlockWords, UInt(WordLength.W)))
   val coreRsp_st2_dataCoreOrder = Wire(Vec(NLanes, UInt(WordLength.W)))
   // hold dataaccess rsp data, when coreRsp CAN'T handle coreReq rsp (memreq conflict)
-  coreRsp_st2_coreRsp_data.io.enq.valid := coreRsp_st2_valid_from_coreReq_Reg.io.deq.valid && !coreRsp_st2_valid_from_coreReq_Reg.io.deq.ready && RegNext(readHit_st1)
+  coreRsp_st2_coreRsp_data.io.enq.valid := coreRsp_st2_valid_from_coreReq_Reg.io.deq.valid && !coreRsp_st2_valid_from_coreReq_Reg.io.deq.ready && RegNext(readHit_st1, false.B)
   coreRsp_st2_coreRsp_data.io.enq.bits := DataAccessReadSRAMRRsp
   coreRsp_st2_coreRsp_data.io.deq.ready := coreRsp_st2_valid_from_coreReq_Reg.io.deq.ready
   val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data.io.deq.valid,coreRsp_st2_coreRsp_data.io.deq.bits,DataAccessReadSRAMRRsp)
@@ -874,7 +877,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
 
   coreRsp_st2_valid_from_coreReq := coreRsp_st2_valid_from_coreReq_Reg.io.deq.bits && coreRsp_st2_valid_from_coreReq_Reg.io.deq.fire
 
-  coreRsp_st2_valid_from_memRsp := RegEnable(MshrAccess.io.missRspOut.valid , coreRsp_st2.io.enq.ready)
+  coreRsp_st2_valid_from_memRsp := RegEnable(MshrAccess.io.missRspOut.valid, false.B, coreRsp_st2.io.enq.ready)
   MshrAccess.io.missRspOut.ready := coreRsp_st2.io.enq.ready
   coreRsp_st2.io.deq.ready := coreRsp_Q.io.enq.ready && !coreRsp_st2_valid_from_memReq//(coreRsp_st2_valid_from_memRsp || coreRsp_st2_valid_from_coreReq || coreRsp_st2_valid_from_memReq) && coreRsp_Q.io.enq.ready
   assert (!(coreRsp_st2_valid_from_coreReq && coreRsp_st2_valid_from_memRsp), s"cRsp from cReq and mRsp conflict")
@@ -904,12 +907,13 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
     flushL2_Reg := false.B
   }
 
-  flushL2 :=  (invalidatenodirty && MemReqArb.io.in(2).ready && !flushL2_Reg)
-  when(flushL2){
-    InvOrFluAlreadyflush := true.B
-  }.elsewhen(coreReqInvOrFluValid_st0){
-    InvOrFluAlreadyflush := false.B
-  }
+  flushL2 :=  (invalidatenodirty && MemReqArb.io.in(2).ready && !flushL2_Reg && WshrAccess.io.empty)
+  // when(flushL2){
+  //   InvOrFluAlreadyflush := true.B
+  // }.elsewhen(coreReqInvOrFluValid_st0){
+  //   InvOrFluAlreadyflush := false.B
+  // }
+  // 上面这个定义没有被使用，这里去掉
   TagAccess.io.invalidateAll := flushL2 && coreReqControl_st1_Q.io.deq.bits.isInvalidate
 
   memReq_Q.io.enq <> MemReqArb.io.out
@@ -918,7 +922,7 @@ class DataCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends 
   MemReqArb.io.in(0).bits := dirtyReplace_st1
   MemReqArb.io.in(1).valid := coreReq_st1_valid  && coreReq_Q.io.deq.fire && ((writeMiss_st1 || readMiss_st1) && mshrProbeStatus === 0.U) //&& !injectTagProbe
   MemReqArb.io.in(1).bits := missMemReq
-  MemReqArb.io.in(2).valid := Mux(invalidatenodirty,flushL2 && WshrAccess.io.empty,RegNext(InvOrFluMemReqValid_st1))
+  MemReqArb.io.in(2).valid := Mux(invalidatenodirty,flushL2 && WshrAccess.io.empty,RegNext(InvOrFluMemReqValid_st1, false.B))
   MemReqArb.io.in(2).bits := InvOrFluMemReq
 
   // ******      l1_data_cache::memReq_pipe2_cycle      ******

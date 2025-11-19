@@ -68,6 +68,7 @@ class ICacheExtInf(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) exten
   val memReq = DecoupledIO(new ICacheMemReq_p(SV.getOrElse(mmu.SV32)))
   val TLBRsp = if(MMU_ENABLED) Some(Flipped(DecoupledIO(new mmu.L1TlbRsp(SV.getOrElse(mmu.SV32))))) else None
   val TLBReq = if(MMU_ENABLED) Some(DecoupledIO(new mmu.L1TlbReq(SV.getOrElse(mmu.SV32)))) else None
+  val invalidate = Input(Bool())
 }
 
 class ASourceRegBundle(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends ICacheBundle {
@@ -88,6 +89,8 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
     holdRead = false,
     singlePort = false
   ))
+
+  tagAccess.io.invalidate := io.invalidate
 
   //val mshrMissReq_Q = Module(new Queue(new MSHRmissReq(bABits,tIBits,WIdBits),1,pipe=true,flow=true))
   //flow选项开启是必须的。

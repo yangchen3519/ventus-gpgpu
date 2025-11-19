@@ -9,7 +9,7 @@
 
 extern int parse_arg(
     std::vector<std::string> args, ventus_rtlsim_config_t* config,
-    std::function<void(std::shared_ptr<Kernel>)> new_kernel
+    std::function<void(std::shared_ptr<Kernel>)> new_kernel, std::vector<std::pair<paddr_t, paddr_t>>* dumpmem_ranges
 );
 
 typedef struct {
@@ -40,6 +40,7 @@ int main(int argc, char* argv[]) {
     sim_config.verilator.argc = sizeof(verilator_argv) / sizeof(verilator_argv[0]);
     sim_config.verilator.argv = verilator_argv;
     ventus_rtlsim_config_t sim_config_1 = sim_config; // not needed
+    std::vector<std::pair<paddr_t, paddr_t>> dumpmem_ranges;
 
     // parse cmdline args, set sim-config
     std::vector<std::string> args;
@@ -52,7 +53,7 @@ int main(int argc, char* argv[]) {
             args.push_back(argv[i]);
         }
     }
-    parse_arg(args, &sim_config, nullptr);
+    parse_arg(args, &sim_config, nullptr, nullptr);
 
     //
     // init Ventus RTLSIM
@@ -63,11 +64,9 @@ int main(int argc, char* argv[]) {
     std::function<void(std::shared_ptr<Kernel>)> f_new_kernel = [sim](std::shared_ptr<Kernel> kernel) {
         metadata_t metadata = *kernel->get_metadata();
         metadata.data = new kernel_load_data_callback_t { .datafile = kernel->m_datafile, .sim = sim };
-        ventus_rtlsim_add_kernel__delay_data_loading(
-            sim, &metadata, kernel_load_data_callback, nullptr
-        );
+        ventus_rtlsim_add_kernel__delay_data_loading(sim, &metadata, kernel_load_data_callback, nullptr);
     };
-    parse_arg(args, &sim_config_1, f_new_kernel);
+    parse_arg(args, &sim_config_1, f_new_kernel, &dumpmem_ranges);
 
     //
     // Run simulation, each step stands for 1 simulation time-unit
@@ -83,6 +82,25 @@ int main(int argc, char* argv[]) {
     //
     // Finish simulation, release resources
     //
+    if (!result->error && !result->time_exceed && result->idle) {
+        for (int i = 0; i < 10000; i++) {
+            ventus_rtlsim_step(sim); // 额外运行一会儿，等待缓存invalidate结束
+        }
+    }
+    for (const auto& range : dumpmem_ranges) { // 命令行参数要求输出的内存内容，每4字节输出1行
+        paddr_t begin = range.first;
+        paddr_t end = range.second;
+        size_t len = (end - begin + 7) / 4 * 4;
+        std::unique_ptr<uint8_t[]> buffer = std::make_unique<uint8_t[]>(len);
+        if (!ventus_rtlsim_pmemcpy_d2h(sim, buffer.get(), begin, len)) {
+            spdlog::error("Failed to dump physical memory [0x{:#x}, 0x{:#x}]", begin, end);
+            continue;
+        }
+        for (paddr_t addr = begin; addr <= end; addr += 4) {
+            uint32_t word = *(uint32_t*)(buffer.get() + (addr - begin));
+            fmt::print("dump-mem: mem[0x{:08X} +: 4] = 0x{:08X}\n", addr, word);
+        }
+    }
     ventus_rtlsim_finish(sim, false);
 
     return 0;

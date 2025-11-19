@@ -7,6 +7,8 @@ export MAKEFLAGS += +r
 RELEASE ?= 0
 PREFIX ?= $(CURDIR)/install
 
+export RTL_GVM_ENABLED = false
+
 #=====================================================================
 # Helpers
 #=====================================================================
@@ -59,7 +61,7 @@ endif
 VLIB_SRC_SCALA = $(shell find $(VLIB_DIR_SCALA) -name "*.scala")
 VLIB_SRC_V = dut.v
 VLIB_SRC_CXX_EXPORT = ventus_rtlsim.cpp # API in these files will be exported to shared library
-VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp $(VLIB_SRC_CXX_EXPORT)
+VLIB_SRC_CXX = kernel.cpp physical_mem.cpp cta_sche_wrapper.cpp ventus_rtlsim_impl.cpp rtl_parameters.cpp $(VLIB_SRC_CXX_EXPORT)
 VLIB_SRC_CXX_ABSPATH = $(abspath $(VLIB_SRC_CXX))
 VLIB_VERILATOR_INPUT = $(VLIB_SRC_V) $(VLIB_SRC_CXX_ABSPATH)
 VLIB_VERILATOR_OUTPUT = $(VLIB_DIR_BUILDOBJ)/libVdut.a
@@ -78,7 +80,7 @@ VLIB_OBJ_EXPORT = $(VLIB_SRC_CXX_EXPORT:%.cpp=$(VLIB_DIR_BUILDOBJ)/%.o)
 
 # Verilated model parallelism config
 VLIB_NPROC_CPU = $(shell nproc)
-VLIB_NPROC_DUT = 11 # Depends on RTL circuit size, just try and find a verilator-allowed largest number
+VLIB_NPROC_DUT = 8 # Depends on RTL circuit size, just try and find a verilator-allowed largest number
 VLIB_NPROC_SIM = $(call MIN_FUNC, $(VLIB_NPROC_CPU), $(VLIB_NPROC_DUT))
 VLIB_NPROC_TRACE_FST = $(call MIN_FUNC, $(VLIB_NPROC_SIM), 2)
 
@@ -88,13 +90,20 @@ VLIB_VERILATOR_FLAGS += -MMD
 VLIB_VERILATOR_FLAGS += --error-limit 100
 # How to deal with verilog value 'x' and 'z'
 ifeq ($(RELEASE),1)
-VLIB_VERILATOR_FLAGS += -x-assign fast -x-initial fast
+VLIB_VERILATOR_FLAGS += --x-assign fast --x-initial unique
 else
-VLIB_VERILATOR_FLAGS += -x-assign unique -x-initial unique
+VLIB_VERILATOR_FLAGS += --x-assign unique --x-initial unique
 endif
 # Warn about lint issues; may not want this on less solid designs
 #VLIB_VERILATOR_FLAGS += -Wall
 VLIB_VERILATOR_FLAGS += -Wno-WIDTHEXPAND
+VLIB_VERILATOR_FLAGS += -Wno-WIDTHTRUNC
+# Define macros for Verilog
+# random init
+VLIB_VERILATOR_FLAGS += -DPRINTF_COND=1
+VLIB_VERILATOR_FLAGS += -DRANDOMIZE
+VLIB_VERILATOR_FLAGS += -DRANDOMIZE_MEM_INIT
+VLIB_VERILATOR_FLAGS += -DRANDOMIZE_REG_INIT
 # Make waveforms
 VLIB_VERILATOR_FLAGS += --trace-fst
 # Check SystemVerilog assertions
@@ -133,10 +142,11 @@ VLIB_VERILATOR_FLAGS += --prefix Vdut -Mdir $(VLIB_DIR_BUILDOBJ)
 
 default: lib
 
-$(VLIB_SRC_V): $(VLIB_SRC_SCALA)
+$(VLIB_SRC_V) parameters.json &: $(VLIB_SRC_SCALA)
 	cd .. && ./mill ventus[6.4.0].runMain top.emitVerilog
 	mv GPGPU_SimTop.v $(VLIB_SRC_V)
-	sed -i "1i\`define PRINTF_COND 1" $(VLIB_SRC_V)
+rtl_parameters.cpp: parameters.json json2cpp.py
+	python3 json2cpp.py
 
 verilog: $(VLIB_SRC_V)
 
@@ -184,7 +194,11 @@ clean-lib-dep: clean-lib
 clean-verilated: 
 	-rm -rf $(VLIB_DIR_BUILD)
 
-clean-verilog: clean-verilated
+clean-gvm:
+	-rm -rf build/libVentusGVM
+	-rm -rf verilog-out
+
+clean-verilog: clean-verilated clean-gvm
 	-rm -f $(VLIB_SRC_V)
 
-.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog info-verilator install
+.PHONY: clean-lib clean-lib-dep clean-verilated clean-verilog clean-gvm info-verilator install

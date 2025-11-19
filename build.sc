@@ -188,10 +188,16 @@ trait Ventus
   def rocketchipModule = rocketchip(crossValue)
   def inclusivecacheModule = inclusivecache(crossValue)
   def memboxModule = MemboxS(crossValue)
+  def ivyDeps = super.ivyDeps() ++ Agg(
+      ivy"io.circe::circe-core:0.14.6",
+      ivy"io.circe::circe-generic:0.14.6",
+      ivy"io.circe::circe-parser:0.14.6",
+    )
 
   override def forkArgs = Seq("-Xmx32G", "-Xss192m")
   override def scalacOptions = super.scalacOptions() ++ Seq(
     "-language:reflectiveCalls",
+    "-Ymacro-annotations",
     "-deprecation",
     "-feature",
     "-Xcheckinit"

@@ -28,6 +28,7 @@ import axi._
 import freechips.rocketchip.amba.axi4._
 import mmu.{AsidLookup, L1TLB, L1TlbAutoReflect, L1ToL2TlbXBar, L2TLB, L2TlbReq, L2TlbRsp, L2TlbToL2CacheXBar}
 import scala.Option.option2Iterable
+import gvm._
 
 class host2CTA_data extends Bundle{
   val host_wg_id            = UInt(CTA_SCHE_CONFIG.WG.WG_ID_WIDTH)
@@ -132,6 +133,8 @@ class GPGPU_axi_top extends Module{
   gpgpu_top.io.out_d(0)<>axi_adapter.io.l2cache_outd
   gpgpu_top.io.host_req<>axi_lite_adapter.io.data
   gpgpu_top.io.host_rsp<>axi_lite_adapter.io.rsp
+  gpgpu_top.io.cycle_cnt:=0.U
+  gpgpu_top.io.icache_invalidate:=false.B
 }
 class GPGPU_axi_adapter_top extends Module{
   val l2cache_axi_params=AXI4BundleParameters(32,64,log2Up(l2cache_micro.num_sm)+log2Up(l2cache_micro.num_warp)+1)
@@ -157,6 +160,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(NSms, Vec(2, UInt(32.W))))) else None
     val cycle_cnt = Input(UInt(20.W))
     val asid_fill = if(MMU_ENABLED) Some(Input(Flipped(ValidIO(new mmu.AsidLookupEntry(SV.get))))) else None
+    val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
   val sm_wrapper=VecInit((0 until NSms).map(i => Module(new SM_wrapper(FakeCache, i, SV)).io))
@@ -179,6 +183,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
       sm_wrapper(i * NSmInCluster + j).memRsp.bits := sm2clusterArb(i).memRspVecOut(j).bits
       sm_wrapper(i * NSmInCluster + j).memRsp.valid := sm2clusterArb(i).memRspVecOut(j).valid
        sm2clusterArb(i).memRspVecOut(j).ready := sm_wrapper(i * NSmInCluster + j).memRsp.ready
+      sm_wrapper(i * NSmInCluster + j).icache_invalidate := io.icache_invalidate
     }
     l2distribute(i).memReqIn.valid := sm2clusterArb(i).memReqOut.valid
     l2distribute(i).memReqIn.bits := sm2clusterArb(i).memReqOut.bits
@@ -347,6 +352,7 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
       val ppn = UInt(SV.getOrElse(mmu.SV32).ppnLen.W)
       val flags = UInt(8.W)
     })))) else None
+    val icache_invalidate = Input(Bool())
     //val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
   })
@@ -369,6 +375,7 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   l1Cache2L2Arb.io.memRspIn <> io.memRsp
 
   val icache = Module(new InstructionCache(SV)(param))
+  icache.io.invalidate := io.icache_invalidate
   // **** icache memRsp ****
   icache.io.memRsp.valid := l1Cache2L2Arb.io.memRspVecOut(0).valid
   icache.io.memRsp.bits.d_addr := l1Cache2L2Arb.io.memRspVecOut(0).bits.d_addr
@@ -498,6 +505,22 @@ if(MMU_ENABLED) {
   pipe.io.shared_rsp.bits.instrId:=sharedmem.io.coreRsp.bits.instrId
   pipe.io.shared_rsp.bits.activeMask:=sharedmem.io.coreRsp.bits.activeMask
   // pipe.io.shared_rsp.bits.isWrite:=sharedmem.io.coreRsp.bits.isWrite
+  
+  if(GVM_ENABLED){
+    val WF_ID_WIDTH = log2Ceil(num_warp_in_a_block)
+    val gvm_cta2warp = Module(new GvmDutCta2Warp)
+    // CTA 调度器向 SM 分配 warp 时，获取软硬件 warp 对应关系、寄存器起始地址、wg_slot id in warp_scheduler
+    gvm_cta2warp.io.clock := clock
+    gvm_cta2warp.io.warp_req_fire := cta2warp.io.warpReq.fire
+    gvm_cta2warp.io.software_wg_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wg_id.pad(32)
+    gvm_cta2warp.io.software_warp_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(WF_ID_WIDTH-1,0).pad(32)
+    gvm_cta2warp.io.sm_id := sm_id.U(32.W)
+    gvm_cta2warp.io.hardware_warp_id := cta2warp.io.warpReq.bits.wid.pad(32)
+    gvm_cta2warp.io.sgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_sgpr_base_dispatch.pad(32)
+    gvm_cta2warp.io.vgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_vgpr_base_dispatch.pad(32)
+    gvm_cta2warp.io.wg_slot_id_in_warp_sche := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH-1, WF_ID_WIDTH)
+    gvm_cta2warp.io.rtl_num_thread := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_size_dispatch.pad(32)
+  }
 }
 
 
@@ -550,7 +573,7 @@ class SM2clusterArbiter(L2param: InclusiveCacheParameters_lite)(implicit p: Para
     }
    // io.memRspVecOut(i).valid :=
     else {
-      io.memRspIn.bits.source(log2Up(NSmInCluster) + log2Ceil(NCacheInSM) + l1cache_sourceBits- 1, l1cache_sourceBits + log2Ceil(NCacheInSM)) === i.asUInt && io.memRspIn.valid
+      io.memRspVecOut(i).valid := io.memRspIn.bits.source(log2Up(NSmInCluster) + log2Ceil(NCacheInSM) + l1cache_sourceBits- 1, l1cache_sourceBits + log2Ceil(NCacheInSM)) === i.asUInt && io.memRspIn.valid
     }
   }
   if(NSmInCluster == 1){

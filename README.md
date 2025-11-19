@@ -20,14 +20,26 @@ You can get the release version of software toolchain [here](https://opengpgpu.o
 
 ## Citation and Presentation Materials
 
-Our work has been accepted to **The 42nd IEEE International Conference on Computer Design (ICCD 2024)**. If you find this repository helpful for your research, please consider citing our paper:
+If you find this repository helpful for your research, please consider citing our paper:
 
 ### Paper Information
 
-J. Li et al., "Ventus: A High-performance Open-source GPGPU Based on RISC-V and Its Vector Extension," 2024 IEEE 42nd International Conference on Computer Design (ICCD), Milan, Italy, 2024, pp. 276-279, doi: 10.1109/ICCD63220.2024.00049.
+* **IEEE Transactions on Very Large Scale Integration Systems (TVLSI 2025)**   
+* **The 42nd IEEE International Conference on Computer Design (ICCD 2024)**   
 
 ```bibtex
-@INPROCEEDINGS{10818098,
+@ARTICLE{VentusTVLSI2025,
+  author={Li, Jingzhou and Yu, Fangfei and Ma, Mingyuan and Liu, Wei and Wang, Yuhan and Wu, Hualin and He, Hu},
+  journal={IEEE Transactions on Very Large Scale Integration (VLSI) Systems}, 
+  title={RISC-V-Based GPGPU With Vector Capabilities for High-Performance Computing}, 
+  year={2025},
+  volume={33},
+  number={8},
+  pages={2239-2251},
+  keywords={Vectors;Instruction sets;Registers;Graphics processing units;Computer architecture;Hardware;Vector processors;Single instruction multiple data;Field programmable gate arrays;High performance computing;General-purpose graphics processing unit (GPGPU);high-performance computing;open-source design;RISC-V;vector},
+  doi={10.1109/TVLSI.2025.3574427}}
+
+@INPROCEEDINGS{VentusICCD2024,
   author={Li, Jingzhou and Yang, Kexiang and Jin, Chufeng and Liu, Xudong and Yang, Zexia and Yu, Fangfei and Shi, Yujie and Ma, Mingyuan and Kong, Li and Zhou, Jing and Wu, Hualin and He, Hu},
   booktitle={2024 IEEE 42nd International Conference on Computer Design (ICCD)}, 
   title={Ventus: A High-performance Open-source GPGPU Based on RISC-V and Its Vector Extension}, 
@@ -55,7 +67,13 @@ Use the script in [ventus-llvm](https://github.com/THU-DSP-LAB/llvm-project) to 
 
 ## Quick Start
 
-如果你需要从头开始配置WSL和IDEA的开发环境，可以参考中文教程[从零开始的配置教程](https://zhuanlan.zhihu.com/p/586445036)。这个教程的部分命令已经过时，但依然是很好的参考。
+**推荐使用[ventus-env](https://github.com/THU-DSP-LAB/ventus-env)项目来获取包括本仓库在内的完整乘影工具链用于仿真**  
+您也可以单独获取此仓库，用`sim-verilator/`做部分RTL仿真
+
+**It is recommended to use the [ventus-env](https://github.com/THU-DSP-LAB/ventus-env) project** to get the complete Ventus toolchain, including this repository, for simulation.   
+Alternatively, you can access this repository separately and use `sim-verilator/` for some RTL simulation testcases.
+
+如果你需要从头开始配置WSL和IDEA的开发环境，可以参考中文教程[从零开始的配置教程](https://zhuanlan.zhihu.com/p/586445036)。这个教程的部分命令已经过时，但依然是很好的参考。也可以使用vscode中的Scala Metals插件导入`build.sc`(mill)项目配置。
 
 The tutorial of Chisel development environment configuration comes from [chipsalliance/playground: chipyard in mill :P](https://github.com/chipsalliance/playground)
 
@@ -71,7 +89,7 @@ The tutorial of Chisel development environment configuration comes from [chipsal
 apt-get install gcc g++ make parallel wget cmake verilator git llvm clang lld protobuf-compiler antlr4 numactl
 ```
 
-> We recomment using java 17 or higher versions. **We test the project under java 19.**
+> We recomment using java 17 or higher versions. **We test the project under java 19/21.**
 
 1. Clone project, init and update dependencies
 
@@ -80,11 +98,19 @@ git clone https://github.com/THU-DSP-LAB/ventus-gpgpu.git
 make init
 ```
 
-2. IDE support `make idea` or `make bsp # generate IDE bsp`
+2. IDE support `make idea` or `make bsp # generate IDE bsp`. Or use vscode (Scala Metals plugin) to import project (`build.sc`).
 
-3. to generate verilog file, use `make verilog`. The output file is `GPGPU_top.v` .
+3. to generate verilog file, use `make verilog`. The output file is `GPGPU_top.v` . Or use `make fpga-verilog` to generate verilog files in `gen_fpga_verilog/` which we use for deploying Ventus on FPGA.
 
-4. to run tests, use `make test`. Output waveform file is at `test_run_dir` . Due to the limitations of `chiseltest`, we have customized another simulation framework based on Verilator. Please refer to the `sim-verilator` folder's README for more details.
+4. to run tests: `make test` is **deprecated**. Output waveform file is at `test_run_dir` . Due to the limitations of `chiseltest`, we have customized another simulation framework based on Verilator. Please refer to the `sim-verilator` folder's README for more details.
+
+It is recommended to use the [ventus-env](https://github.com/THU-DSP-LAB/ventus-env) project to get the complete Ventus toolchain for simulation.    
+`.metadata` and `.data` files are a legacy method for providing testcases in RTL simulation.
+
+<details>
+<summary>
+Click here to see descriptions of `.metadata` and `.data` files 
+</summary>
 
 ## Kernel Metadata and Data File Format
 
@@ -138,6 +164,8 @@ The `.data` file contains initialization data for all buffers defined in the `.m
 - Each buffer’s initialization data:
   - Starts at its respective `buffer_base` address.
   - Spans exactly `size` bytes as specified in `buffer_size`.
+
+</details>
 
 ## Memory Access
 
@@ -228,7 +256,7 @@ We refer to some open-source design when developing Ventus GPGPU.
 
 | Sub module    | Source                                                                               | Detail                                                                             |
 | ------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| CTA scheduler | [MIAOW](https://github.com/VerticalResearchGroup/miaow)                              | Our CTA scheduler module is based on MiaoW ultra-threads dispatcher.               |
+| CTA scheduler | [MIAOW](https://github.com/VerticalResearchGroup/miaow)                              | Our CTA scheduler module was based on MiaoW ultra-threads dispatcher in the past.               |
 | L2Cache       | [block-inclusivecache-sifive](https://github.com/sifive/block-inclusivecache-sifive) | Our L2Cache design is inspired by Sifive's block-inclusivecache                    |
 | Multiplier    | [XiangShan](https://github.com/OpenXiangShan/XiangShan)                              | We reused Array Multiplier in XiangShan. FPU design is also inspired by XiangShan. |
 | Config, ...   | [rocket-chip](https://github.com/chipsalliance/rocket-chip)                          | Some modules are sourced from RocketChip                                           |

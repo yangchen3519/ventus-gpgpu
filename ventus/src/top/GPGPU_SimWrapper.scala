@@ -80,6 +80,7 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
     val cnt = Output(UInt(32.W))
     val inst_cnt = if(INST_CNT) Some(Output(Vec(num_sm, UInt(32.W)))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(num_sm, Vec(2, UInt(32.W))))) else None
+    val icache_invalidate = Input(Bool())
   })
 
   val counter = new Counter(200000)
@@ -94,8 +95,7 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
 
   GPU.io.cycle_cnt := counter.value
   if(MMU_ENABLED){
-    GPU.io.asid_fill.foreach{ _ <> io.asid_fill.get
-  }
+    GPU.io.asid_fill.foreach{ _ <> io.asid_fill.get }
   }
 
   val pipe_a = Module(new DecoupledPipe(new TLBundleA_lite(l2cache_params), 2))
@@ -107,6 +107,8 @@ class GPGPU_SimWrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = Non
 
   GPU.io.host_req <> io.host_req
   io.host_rsp <> GPU.io.host_rsp
+
+  GPU.io.icache_invalidate := io.icache_invalidate
 
   if(INST_CNT) io.inst_cnt.foreach{_ := GPU.io.inst_cnt.getOrElse(0.U) }
   if(INST_CNT_2) io.inst_cnt2.foreach{_ := GPU.io.inst_cnt2.getOrElse(0.U) }

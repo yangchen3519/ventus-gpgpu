@@ -12,6 +12,7 @@ class RegFileBankIO extends Bundle  {
   val rdidx  = Input(UInt(depth_regBank.W))
   val rdwen  = Input(Bool())
   //val ready  = Output(Bool())
+  val all_regs = if (GVM_ENABLED) Some(Output(Vec(NUMBER_SGPR_SLOTS / num_bank, UInt(xLen.W)))) else None  
 }
 
 class RegFileBank extends Module  {
@@ -19,10 +20,21 @@ class RegFileBank extends Module  {
   val regs = SyncReadMem(NUMBER_SGPR_SLOTS/num_bank, UInt(xLen.W))
   val bypassSignal = Wire(Bool())
   bypassSignal := RegNext((io.rsidx===io.rdidx)&io.rdwen)
-  io.rs := Mux(bypassSignal,RegNext(io.rd), regs.read(io.rsidx))
-  //io.ready := true.B
-  when (io.rdwen) {
-    regs.write(io.rdidx, io.rd)
+  if (!GVM_ENABLED) {
+    val regs = SyncReadMem(NUMBER_SGPR_SLOTS/num_bank, UInt(xLen.W)) 
+    io.rs := Mux(bypassSignal,RegNext(io.rd), regs.read(io.rsidx))
+    //io.ready := true.B
+    when (io.rdwen) {
+      regs.write(io.rdidx, io.rd)
+    }
+  }
+  else {
+    val regs_gvm = RegInit(VecInit(Seq.fill(NUMBER_SGPR_SLOTS / num_bank)(0.U(xLen.W)))) // gvm DUT
+    io.rs := Mux(bypassSignal, RegNext(io.rd), RegNext(regs_gvm(io.rsidx)))
+    when(io.rdwen) {
+      regs_gvm(io.rdidx) := io.rd
+    }
+    io.all_regs.get := regs_gvm
   }
 }
 

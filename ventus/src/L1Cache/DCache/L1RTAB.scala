@@ -70,7 +70,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
 //st0 req hit in RTAB Entry
   for(i<-0 until NRTABs){
     blockAddrMatchInRTAB(i) := (Cat(Req_access(i).tag,Req_access(i).setIdx) === Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx))  &&
-      EntryValid(i)
+      EntryValid(i) && (RTABlink_idx(i).head(1) === 0.U)
       //(Req_access(i).tag === io.coreReq_st1.bits.tag) && (Req_access(i).setIdx === io.coreReq_st1.bits.setIdx) &&  EntryValid(i)
   }
   val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR // st0 request match in RTAB

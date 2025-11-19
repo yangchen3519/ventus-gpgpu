@@ -13,13 +13,14 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   val SPIKE_OUTPUT: Boolean = true
   val INST_CNT: Boolean = true
   val INST_CNT_2: Boolean = false
+  val GVM_ENABLED: Boolean = sys.env.getOrElse("RTL_GVM_ENABLED", "false").toBoolean
   val MMU_ENABLED: Boolean = false
   val DCACHE_DEBUG: Boolean = false
   def MMU_ASID_WIDTH = mmu.SV32.asidLen
   val wid_to_check = 2
   def num_bank = 4                  // # of banks for register file
   def num_collectorUnit = num_warp
-  def num_vgpr:Int = 256*num_warp
+  def num_vgpr:Int = 128*num_warp
   def num_sgpr:Int = 256*num_warp
   def depth_regBank = log2Ceil(num_vgpr/num_bank)
   def regidx_width = 5
@@ -76,7 +77,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def dcache_NWays: Int = 2
 
-  def dcache_BlockWords: Int = 8  // number of words per cacheline(block)
+  def dcache_BlockWords: Int = 32  // number of words per cacheline(block)
   def dcache_wshr_entry: Int = 4
 
   def dcache_SetIdxBits: Int = log2Ceil(dcache_NSets)
@@ -143,7 +144,7 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def l1tlb_ways = 8
 
-  val LDS_BASE : BigInt = 0x70000000  // LDS base address: a hyperparameter used within each SM
+  val LDS_BASE = 0x70000000  // LDS base address: a hyperparameter used within each SM
 
   def NUMBER_CU = num_sm
   def NUMBER_VGPR_SLOTS = num_vgpr
@@ -206,4 +207,144 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
     val DEBUG = true
   }
 
+}
+
+//
+// save parameters to json file
+//
+
+import io.circe._
+import io.circe.syntax._
+import scala.reflect.runtime.universe._
+import scala.reflect.runtime.{universe => ru}
+import java.io.{File, PrintWriter}
+import scala.collection.immutable.TreeMap
+
+object ParametersToJson {
+  
+  /**
+   * 提取parameters对象的所有字段和无参函数值，并按名称排序
+   */
+  def extractAllParameters(): TreeMap[String, Json] = {
+    val mirror = ru.runtimeMirror(getClass.getClassLoader)
+    val instanceMirror = mirror.reflect(parameters)
+    val typeSignature = instanceMirror.symbol.typeSignature
+    val members = typeSignature.members
+    
+    // 使用TreeMap自动按键排序
+    var result = TreeMap[String, Json]()
+    
+    members.foreach { member =>
+      val memberName = member.name.toString.trim
+      
+      // 过滤系统方法和特殊成员
+      if (isValidMember(memberName)) {
+        try {
+          val value = extractMemberValue(member, instanceMirror)
+          value.foreach { v =>
+            result = result + (memberName -> convertToJson(v))
+          }
+        } catch {
+          case _: Exception => // 忽略无法访问的成员
+        }
+      }
+    }
+    
+    result
+  }
+  
+  /**
+   * 判断是否为有效的成员名称
+   */
+  private def isValidMember(name: String): Boolean = {
+    !name.startsWith("<") && 
+    !name.contains("$") && 
+    !Set("toString", "hashCode", "equals", "getClass", 
+         "wait", "notify", "notifyAll", "asInstanceOf", 
+         "isInstanceOf", "synchronized", "clone", "finalize").contains(name)
+  }
+  
+  /**
+   * 提取成员的值
+   */
+  private def extractMemberValue(member: Symbol, instanceMirror: InstanceMirror): Option[Any] = {
+    if (member.isModule) {
+      None // 跳过嵌套对象
+    } else if (member.isMethod) {
+      val methodSymbol = member.asMethod
+      // 只处理无参方法（非getter）
+      if ((methodSymbol.paramLists.isEmpty || methodSymbol.paramLists.forall(_.isEmpty)) && 
+          !methodSymbol.isGetter) {
+        val methodMirror = instanceMirror.reflectMethod(methodSymbol)
+        Some(methodMirror.apply())
+      } else None
+    } else if (member.isTerm) {
+      val termSymbol = member.asTerm
+      if (termSymbol.isVal || termSymbol.isVar) {
+        val fieldMirror = instanceMirror.reflectField(termSymbol)
+        Some(fieldMirror.get)
+      } else None
+    } else None
+  }
+  
+  /**
+   * 将任意值转换为Circe的Json类型
+   */
+  private def convertToJson(value: Any): Json = value match {
+    case null => Json.Null
+    case b: Boolean => Json.fromBoolean(b)
+    case i: Int => Json.fromInt(i)
+    case l: Long => Json.fromLong(l)
+    case f: Float => Json.fromFloatOrNull(f)
+    case d: Double => Json.fromDoubleOrNull(d)
+    case s: String => Json.fromString(s)
+    case bi: BigInt => Json.fromString(bi.toString)
+    case bd: BigDecimal => Json.fromBigDecimal(bd)
+    case seq: Seq[_] => Json.fromValues(seq.map(convertToJson))
+    case arr: Array[_] => Json.fromValues(arr.map(convertToJson))
+    case map: Map[_, _] => 
+      val sortedMap = TreeMap[String, Json]() ++ map.map { case (k, v) => 
+        k.toString -> convertToJson(v)
+      }
+      Json.obj(sortedMap.toSeq: _*)
+    case opt: Option[_] => opt.map(convertToJson).getOrElse(Json.Null)
+    case _ => Json.fromString(value.toString)
+  }
+  
+  /**
+   * 保存所有参数到JSON文件（自动提取并排序）
+   * @param filename 输出文件名
+   * @param pretty 是否格式化输出
+   */
+  def saveToJson(filename: String = "parameters.json", pretty: Boolean = true): Unit = {
+    try {
+      val parameters = extractAllParameters()
+      val json = Json.obj(parameters.toSeq: _*) // convert to json
+      
+      val jsonString = if (pretty) {
+        json.spaces2  // 使用2空格缩进的格式化输出
+      } else {
+        json.noSpaces // 紧凑输出
+      }
+      
+      // save to json file
+      val writer = new PrintWriter(new File(filename))
+      try {
+        writer.write(jsonString)
+        writer.flush()
+      } finally {
+        writer.close()
+      }
+    } catch {
+      case e: Exception =>
+        println(s"❌ Error saving parameters to JSON file: ${e.getMessage}")
+        e.printStackTrace()
+    }
+  }
+  
+}
+
+object ParamPrintApp extends App {
+  import ParametersToJson._
+  saveToJson("parameters.json", pretty = true)
 }

@@ -47,14 +47,21 @@ class ALUexe extends Module{
     result.io.enq.bits.spike_info.get:=io.in.bits.ctrl.spike_info.get
     result_br.io.enq.bits.spike_info.get:=io.in.bits.ctrl.spike_info.get
   }
-  io.in.ready:=MuxLookup(io.in.bits.ctrl.branch,result_br.io.enq.ready&result.io.enq.ready)(Seq(B_B->result_br.io.enq.ready,B_N->result.io.enq.ready))
+  io.in.ready := MuxLookup(io.in.bits.ctrl.branch, result_br.io.enq.ready & result.io.enq.ready)(Seq(
+    B_B->result_br.io.enq.ready,
+    B_N->result.io.enq.ready
+  ))
 
   result_br.io.enq.bits.wid:=io.in.bits.ctrl.wid
   result_br.io.enq.bits.new_pc:=io.in.bits.in3
   result_br.io.enq.bits.jump:=MuxLookup(io.in.bits.ctrl.branch,false.B)(Seq(B_B->alu.io.cmp_out,B_J->true.B,B_R->true.B))
 
-  result_br.io.enq.valid:=io.in.valid&(io.in.bits.ctrl.branch=/=B_N)
-  result.io.enq.valid:=io.in.valid&io.in.bits.ctrl.wxd
+  result_br.io.enq.valid := io.in.valid && MuxLookup(io.in.bits.ctrl.branch, result.io.enq.ready)(Seq(
+    B_B -> true.B, B_N -> false.B,
+  ))
+  result.io.enq.valid := io.in.valid && io.in.bits.ctrl.wxd && MuxLookup(io.in.bits.ctrl.branch, result_br.io.enq.ready)(Seq(
+    B_B -> false.B, B_N -> true.B,
+  ))
 }
 class vMULexe extends Module{
   val io = IO(new Bundle {
@@ -519,6 +526,12 @@ class vALUv2(softThread: Int = num_thread, hardThread: Int = num_thread) extends
             .otherwise(alu(x).func := Cat(3.U(4.W), io.in.bits.ctrl.alu_fn(0)))
           result.io.enq.bits.wb_wvd_rd(x) := (~alu(x).out)
         })
+      }
+      when(io.in.bits.ctrl.alu_fn===FN_SEQ || io.in.bits.ctrl.alu_fn===FN_SNE ||
+        io.in.bits.ctrl.alu_fn===FN_SGE || io.in.bits.ctrl.alu_fn===FN_SGEU ||
+        io.in.bits.ctrl.alu_fn===FN_SLT || io.in.bits.ctrl.alu_fn===FN_SLTU
+      ){
+        result.io.enq.bits.wb_wvd_rd(x) := alu(x).cmp_out.asUInt
       }
       when(io.in.bits.ctrl.alu_fn === FN_VID) {
         result.io.enq.bits.wb_wvd_rd(x) := x.asUInt
