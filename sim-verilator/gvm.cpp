@@ -78,6 +78,8 @@ void gvm_t::getDut() {
   getDutInsnFinish(); // 标记指令条目为已完成，维护 dut_done 与 dut_result
   getDutXReg(); // 根据 warp 条目更新 XReg 条目
   getDutWarpNewSetRefXReg();
+  getDutVReg(); // 根据 warp 条目更新 VReg 条目
+  getDutWarpNewSetRefVReg();
   clearGlobal(); // 清空全局变量
 }
 
@@ -90,7 +92,8 @@ void gvm_t::getDutWarpNew() {
     d.software_warp_id = item.software_warp_id;
     d.xreg_base = item.sgpr_base;
     d.xreg_usage = g_sgprUsage; // 临时特殊处理
-    // d.vreg_base = item.vgpr_base;
+    d.vreg_base = item.vgpr_base;
+    d.vreg_usage = g_vgprUsage; // 临时特殊处理
     d.base_dispatch_id_set = 0;
     d.wg_slot_id_in_warp_sche = item.wg_slot_id_in_warp_sche;
     d.num_thread = item.num_thread_in_warp;
@@ -396,6 +399,52 @@ void gvm_t::getDutWarpNewSetRefXReg() {
   }
 }
 
+void gvm_t::getDutVReg() {
+  // 从交织的寄存器板块中，提取每个 warp 各自的寄存器
+  std::map<uint32_t, std::map<uint32_t, VRegData>> g_vreg_data_mapped;
+  assert(!g_vreg_data.empty());
+  for (const auto& item : g_vreg_data) {
+    g_vreg_data_mapped[item.sm_id][item.bank_id] = item;
+  }
+  for (auto& warp : dut_active_warps) {
+    warp.second.curr_vreg.resize(warp.second.vreg_usage);
+    // 将这个 warp 的寄存器从交织的板块中提取出来
+    uint32_t num_bank = g_vreg_data_mapped[warp.second.sm_id].begin()->second.num_bank;
+    assert((num_bank & (num_bank - 1)) == 0); // 断言 num_bank 是 2 的幂
+    // 断言 warp 的寄存器是对齐到板块个数的
+    assert(warp.second.vreg_base % num_bank == 0);
+    assert(warp.second.vreg_usage % num_bank == 0);
+    for (int i = 0; i < warp.second.vreg_usage; ++i) {
+      warp.second.curr_vreg[i].resize(warp.second.num_thread);
+      for (int j = 0; j < warp.second.num_thread; ++j) {
+        warp.second.curr_vreg[i][j] = g_vreg_data_mapped[warp.second.sm_id]
+          [(i + warp.second.hardware_warp_id) % num_bank].bank_data[(warp.second.vreg_base + i) >> __builtin_ctz(num_bank)][j];
+      }
+    }
+  }
+}
+
+void gvm_t::getDutWarpNewSetRefVReg() {
+  for (const auto& item : g_cta2warp_data) {
+    auto warp_it = dut_active_warps.find({ item.software_wg_id, item.software_warp_id });
+    if (warp_it == dut_active_warps.end()) {
+      logger->error("GVM error in `gvm_t::getDutWarpNewSetRefVReg`: "
+        "no warp in `dut_active_warps` with required software_wg_id and software_warp_id\n"
+        "getDutWarpNewSetRefVReg Error: software_wg_id: {}, software_warp_id: {}",
+        item.software_wg_id, item.software_warp_id);
+      assert(0);
+    }
+    auto &warp = warp_it->second;
+
+    gvmref_warp_vreg_t vreg_data;
+    vreg_data.vreg.resize(warp.vreg_usage);
+    for (uint32_t i = 0; i < warp.vreg_usage; ++i) {
+      vreg_data.vreg[i] = warp.curr_vreg[i];
+    }
+    gvmref_set_warp_vreg(item.software_wg_id, item.software_warp_id, warp.vreg_usage, vreg_data);
+  }
+}
+
 void gvm_t::clearGlobal() {
   // 清空全局变量
   g_cta2warp_data.clear();
@@ -404,6 +453,7 @@ void gvm_t::clearGlobal() {
   g_xreg_wb_data.clear();
   g_xreg_data.clear();
   g_vreg_wb_data.clear();
+  g_vreg_data.clear();
   g_bar_done_data.clear();
 }
 

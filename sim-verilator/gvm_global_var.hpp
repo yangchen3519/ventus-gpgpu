@@ -55,6 +55,18 @@ struct XRegData {
 extern std::vector<XRegData> g_xreg_data;
 extern uint32_t g_sgprUsage; // num of sgpr used in one warp
 
+struct VRegData {
+  uint32_t sm_id;
+  uint32_t bank_id;
+  uint32_t num_bank;
+  uint32_t num_vgpr_slots;
+  uint32_t num_thread;
+  // bank_data[slot_idx][thread_idx]
+  std::vector<std::vector<uint32_t>> bank_data;
+};
+extern std::vector<VRegData> g_vreg_data;
+extern uint32_t g_vgprUsage; // num of vgpr used in one warp
+
 // VReg Writeback
 struct VRegWritebackData {
   uint32_t sm_id;
