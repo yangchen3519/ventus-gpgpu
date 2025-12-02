@@ -525,6 +525,7 @@ class operandCollector extends Module{
     val sgpr_base = Input(Vec(num_warp,UInt((SGPR_ID_WIDTH+1).W)))
     val vgpr_base = Input(Vec(num_warp,UInt((VGPR_ID_WIDTH+1).W)))
     val scalarBanks = if (GVM_ENABLED) Some(Output(Vec(num_bank, Vec(NUMBER_SGPR_SLOTS / num_bank, UInt(xLen.W))))) else None
+    val vectorBanks = if (GVM_ENABLED) Some(Output(Vec(num_bank, Vec(NUMBER_VGPR_SLOTS / num_bank, Vec(num_thread, UInt(xLen.W)))))) else None
   })
   val collectorUnits = VecInit(Seq.fill(num_collectorUnit)(Module(new collectorUnit).io))
   val Arbiter = Module(new operandArbiter)
@@ -533,6 +534,7 @@ class operandCollector extends Module{
   if (GVM_ENABLED) {
     (0 until num_bank).foreach(i => {
        io.scalarBanks.get(i) := scalarBank(i).all_regs.get
+       io.vectorBanks.get(i) := vectorBank(i).all_regs.get
     })
   }
   val crossBar = Module(new crossBar)

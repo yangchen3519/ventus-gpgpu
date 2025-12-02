@@ -36,6 +36,8 @@ private:
   void getDutBarDone();
   void getDutXReg(); // 根据 warp 条目更新 XReg 条目
   void getDutWarpNewSetRefXReg();
+  void getDutVReg(); // 根据 warp 条目更新 VReg 条目
+  void getDutWarpNewSetRefVReg();
   void clearGlobal(); // 清空全局变量
 
   // gvmStep() 相关函数

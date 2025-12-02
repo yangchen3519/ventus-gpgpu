@@ -69,6 +69,15 @@ class pipe(val sm_id: Int = 0) extends Module{
     }
     // println(s"checkwidth${scalar_flatten_banks.asUInt.getWidth}")
     gvm_xreg.io.xbanks := scalar_flatten_banks.asUInt
+
+    val gvm_vreg = Module(new GvmDutVReg)
+    gvm_vreg.io.clock := clock
+    gvm_vreg.io.sm_id := sm_id.U(32.W)
+    val vector_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_VGPR_SLOTS / num_bank * num_thread * xLen).W)))
+    for (i <- 0 until num_bank) {
+      vector_flatten_banks(i) := operand_collector.io.vectorBanks.get(i).asUInt
+    }
+    gvm_vreg.io.vbanks := vector_flatten_banks.asUInt
   }
   //val issue=Module(new Issue)
   val issueX = Module(new Issue)

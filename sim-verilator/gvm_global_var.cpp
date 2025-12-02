@@ -10,5 +10,7 @@ std::vector<InsnDispatchData> g_insn_dispatch_data;
 std::vector<XRegWritebackData> g_xreg_wb_data;
 std::vector<XRegData> g_xreg_data;
 uint32_t g_sgprUsage = 64;
+std::vector<VRegData> g_vreg_data;
+uint32_t g_vgprUsage = 128;
 std::map<std::tuple<uint32_t,uint32_t,uint32_t>, VRegWritebackData> g_vreg_wb_data;
 std::vector<BarDoneData> g_bar_done_data;

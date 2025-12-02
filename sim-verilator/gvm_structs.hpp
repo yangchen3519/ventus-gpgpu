@@ -68,8 +68,11 @@ struct dut_active_warp_t {
   uint32_t software_warp_id;
   uint32_t xreg_base;
   uint32_t xreg_usage;
+  uint32_t vreg_base;
+  uint32_t vreg_usage;
   uint32_t wg_slot_id_in_warp_sche;
   std::vector<uint32_t> curr_xreg; // xreg
+  std::vector<std::vector<uint32_t>> curr_vreg; // vreg
   std::map<uint32_t, insn_t> insns; // dispatch_id -> insn
   uint32_t base_dispatch_id; // 本 warp 的首条指令的 dispatch_id
   uint32_t next_retire_dispatch_id; // 下一条应当被 retire 的指令的 id

@@ -120,6 +120,36 @@ void c_GvmDutVRegWriteback(int sm_id,
   g_vreg_wb_data[{sm_id, hardware_warp_id, dispatch_id}].wvd_mask[thread_idx] = wvd_mask;
 }
 
+// VRegs
+void c_GvmDutVReg(int num_sm,
+                   int sm_id,
+                   int num_bank,
+                   int num_vgpr_slots,
+                   int num_thread,
+                   int vbanks_word,
+                   int vbanks_word_idx,
+                   int thread_idx) {
+    if (g_vreg_data.empty()) {
+      g_vreg_data.resize(num_sm * num_bank);
+      for (int i = 0; i < num_sm * num_bank; i++) {
+        g_vreg_data[i].bank_data.resize(num_vgpr_slots / num_bank);
+        for (int j = 0; j < num_vgpr_slots / num_bank; j++) {
+          g_vreg_data[i].bank_data[j].resize(num_thread);
+        }
+      }
+    }
+
+    int bank_idx = sm_id * num_bank + vbanks_word_idx / (num_vgpr_slots / num_bank);
+    int slot_idx = vbanks_word_idx % (num_vgpr_slots / num_bank);
+
+    g_vreg_data[bank_idx].sm_id = sm_id;
+    g_vreg_data[bank_idx].bank_id = vbanks_word_idx / (num_vgpr_slots / num_bank);
+    g_vreg_data[bank_idx].num_bank = num_bank;
+    g_vreg_data[bank_idx].num_vgpr_slots = num_vgpr_slots;
+    g_vreg_data[bank_idx].num_thread = num_thread;
+    g_vreg_data[bank_idx].bank_data[slot_idx][thread_idx] = vbanks_word;
+}
+
 // Barrier done
 void c_GvmDutBarrierDone(int sm_id,
                           int hardware_warp_id,

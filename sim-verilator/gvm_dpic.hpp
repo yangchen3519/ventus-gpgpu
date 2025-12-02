@@ -39,6 +39,15 @@ void c_GvmDutXReg(int num_sm,
                    int num_sgpr_slots,
                    int xbanks_word,
                    int xbanks_word_idx);
+// VRegs
+void c_GvmDutVReg(int num_sm,
+                   int sm_id,
+                   int num_bank,
+                   int num_vgpr_slots,
+                   int num_thread,
+                   int vbanks_word,
+                   int vbanks_word_idx,
+                   int thread_idx);
 // VReg Writeback  
 void c_GvmDutVRegWriteback(int sm_id,
                             int rd_data,     // 单个线程的向量数据
