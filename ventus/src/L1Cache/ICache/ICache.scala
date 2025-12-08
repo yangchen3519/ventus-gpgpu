@@ -90,6 +90,7 @@ class InstructionCache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) e
     singlePort = false
   ))
 
+  // TODO: need to deal with MSHR. Clear it or wait for it?
   tagAccess.io.invalidate := io.invalidate
 
   //val mshrMissReq_Q = Module(new Queue(new MSHRmissReq(bABits,tIBits,WIdBits),1,pipe=true,flow=true))

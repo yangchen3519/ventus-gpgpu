@@ -18,7 +18,7 @@ extern "C" {
 typedef struct ventus_rtlsim_t ventus_rtlsim_t;
 typedef uint64_t paddr_t;
 
-typedef struct ventus_kernel_metadata_t { // 这个metadata是供驱动使用的，而不是给硬件的
+typedef struct ventus_kernel_metadata_t {
     // Additional data
     const char* name; // kernel name
     void* data;       // use this as you like, such as callback function argument
@@ -34,10 +34,13 @@ typedef struct ventus_kernel_metadata_t { // 这个metadata是供驱动使用的
     uint64_t pdsSize;          // 每个thread用到的private memory大小
     uint64_t sgprUsage;        // 每个wavefront(warp)使用的标量寄存器数目
     uint64_t vgprUsage;        // 每个wavefront(warp)(also thread)使用的向量寄存器数目
-    uint64_t pdsBaseAddr;  // private memory的基址，要转成每个workgroup的基地址， wf_size*wg_size*pdsSize
-    uint64_t num_buffer;   // buffer的数目，包括pc
-    uint64_t* buffer_base; // 各buffer的基址。第一块buffer是给硬件用的metadata
-    uint64_t* buffer_size; // 各buffer的size，以Bytes为单位。实际使用的大小，用于初始化.data
+    uint64_t pdsBaseAddr; // private memory的基址，要转成每个workgroup的基地址， wf_size*wg_size*pdsSize
+    uint64_t num_thread_global[3]; // 全局三维thread数目
+    uint64_t num_thread_local[3];  // 线程块内三维thread数目
+    uint64_t threadIdxOffset[3];   // global threadIdx偏移量
+    uint64_t num_buffer;           // buffer的数目，包括pc
+    uint64_t* buffer_base;         // 各buffer的基址。第一块buffer是给硬件用的metadata
+    uint64_t* buffer_size;      // 各buffer的size，以Bytes为单位。实际使用的大小，用于初始化.data
     uint64_t* buffer_allocsize; // 各buffer的size，以Bytes为单位。分配的大小
 } ventus_kernel_metadata_t;
 
