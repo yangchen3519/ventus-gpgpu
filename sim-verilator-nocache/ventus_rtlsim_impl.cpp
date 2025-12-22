@@ -358,10 +358,10 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
                     }
                 }
             } else if (req->opcode == L1D_OPCODE_WRITE) {
-                SPDLOG_LOGGER_DEBUG(logger, 
-                    "L1D write: sm {} paddr=0x{:x}, mask=0x{:x}, data=0x{:x}",
-                    req->sm_id, paddr_base, req->mask.to_ulong(), fmt::join(req->data, ",")
-                );
+                // SPDLOG_LOGGER_DEBUG(logger,
+                //     "L1D write: sm {} paddr=0x{:x}, mask=0x{:x}, data=0x{:x}",
+                //     req->sm_id, paddr_base, req->mask.to_ulong(), fmt::join(req->data, ",")
+                // );
                 for (int i = 0; i < NUM_THREAD; i++) {
                     if (req->mask[i]) {
                         paddr_t paddr = paddr_base + (req->blockOffset[i] << 2);
@@ -573,8 +573,8 @@ void ventus_rtlsim_t::snapshot_fork() {
         siginfo_t info;
         sigemptyset(&set);
         sigaddset(&set, SNAPSHOT_WAKEUP_SIGNAL);
-        sigprocmask(SIG_BLOCK, &set, &oldset);   // Block SIG for using sigwait
-        sigwaitinfo(&set, &info);                // Wait for snapshot-rollback
+        sigprocmask(SIG_BLOCK, &set, &oldset); // Block SIG for using sigwait
+        sigwaitinfo(&set, &info);              // Wait for snapshot-rollback
         // main process invoked snapshot rollback
         sigprocmask(SIG_SETMASK, &oldset, NULL); // Change signal blocking mask back
         assert(info.si_signo == SNAPSHOT_WAKEUP_SIGNAL);
