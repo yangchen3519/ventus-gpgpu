@@ -26,12 +26,12 @@ class cu_interface extends Module {
   })
   val NUM_WG_SLOT = CONFIG.GPU.NUM_WG_SLOT
   val NUM_WF_MAX = CONFIG.WG.NUM_WF_MAX
-  val NUM_LDS  = CONFIG.WG.NUM_LDS_MAX
-  val NUM_SGPR = CONFIG.WG.NUM_SGPR_MAX
-  val NUM_VGPR = CONFIG.WG.NUM_VGPR_MAX
+  val NUM_SGPR = CONFIG.GPU.NUM_SGPR
+  val NUM_VGPR = CONFIG.GPU.NUM_VGPR
   val NUM_PDS  = CONFIG.WG.NUM_PDS_MAX
   val MEM_ADDR_WIDTH = CONFIG.GPU.MEM_ADDR_WIDTH
   val NUM_THREAD_HW = CONFIG.GPU.NUM_THREAD
+  val NUM_THREAD_PER_WG_MAX = CONFIG.WG.NUM_THREAD_PER_WG_MAX
   val DEBUG = CONFIG.DEBUG
   class wftag_datatype extends Bundle {
     val wg_slot_id = UInt(log2Ceil(NUM_WG_SLOT).W)
@@ -72,12 +72,13 @@ class cu_interface extends Module {
 
   // the value of splitter_cnt means how many WF is waiting for being sent to CU
   // splitter_cnt==0 means no WF is waiting to be sent, we are waiting for the next WG
-  val splitter_cnt = RegInit(0.U(log2Ceil(NUM_WF_MAX + 1).W)) // how many WF not dispatched in this WG
+  val splitter_cnt = RegInit(0.U(log2Ceil(NUM_WF_MAX + 1).W))// how many WF not dispatched in this WG
   val splitter_lds_addr = WireInit(fifo.io.deq.bits.lds_base)
   val splitter_sgpr_addr = Reg(UInt(log2Ceil(NUM_SGPR).W)) // sgpr base of WF, its value steps num_sgpr_per_wf every time
   val splitter_vgpr_addr = Reg(UInt(log2Ceil(NUM_VGPR).W)) // vgpr base of WF, its value steps num_vgpr_per_wf every time
-  val splitter_pds_addr = Reg(UInt(MEM_ADDR_WIDTH))        // pds  base of WF, its value steps num_pds_per_wf every time
+  val splitter_pds_addr = Reg(UInt(MEM_ADDR_WIDTH))        // pds  base of WF, its value steps num_pds_per_wf  every time
   val splitter_load_new = (splitter_cnt === 0.U) && fifo.io.deq.valid   // A new WG will be loaded to splitter
+  val splitter_num_thread = Reg(UInt(log2Ceil(NUM_THREAD_PER_WG_MAX+1).W))  // number of active thread left in this WG
   fifo.io.deq.ready := (splitter_cnt === 1.U) && wf_sent
   assert(splitter_cnt === 0.U || fifo.io.deq.valid)
   if(DEBUG) { // It's required that since fifo.deq.valid, fifo.deq will not change until fire
@@ -246,6 +247,11 @@ class cu_interface extends Module {
     splitter_load_new -> fifo.io.deq.bits.pds_base,
     io.cu_wf_new(fifo.io.deq.bits.cu_id).fire -> (splitter_pds_addr + fifo.io.deq.bits.num_pds_per_wf),
   ))
+  splitter_num_thread := MuxCase(splitter_num_thread, Seq(
+    // 这里乘法器过大，考虑使用固件CPU算好
+    splitter_load_new -> fifo.io.deq.bits.num_thread_per_wg_x * fifo.io.deq.bits.num_thread_per_wg_y * fifo.io.deq.bits.num_thread_per_wg_z,
+    io.cu_wf_new(fifo.io.deq.bits.cu_id).fire -> Mux(splitter_num_thread > fifo.io.deq.bits.num_thread_per_wf, splitter_num_thread - fifo.io.deq.bits.num_thread_per_wf, 0.U),
+  ))
   assert(splitter_cnt <= 1.U || NUM_SGPR.U - splitter_sgpr_addr > fifo.io.deq.bits.num_sgpr_per_wf)
   assert(splitter_cnt <= 1.U || NUM_VGPR.U - splitter_vgpr_addr > fifo.io.deq.bits.num_vgpr_per_wf)
 
@@ -253,6 +259,7 @@ class cu_interface extends Module {
     io.cu_wf_new(i).valid := (splitter_cnt =/= 0.U) && threadIdxL_ctrl_ok && threadIdxG_ctrl_ok && (fifo.io.deq.bits.cu_id === i.U)
     io.cu_wf_new(i).bits.viewAsSupertype(new ctainfo_host_to_cu {}) := fifo.io.deq.bits
     io.cu_wf_new(i).bits.viewAsSupertype(new ctainfo_host_to_alloc_to_cu {}) := fifo.io.deq.bits.viewAsSupertype(new ctainfo_host_to_alloc_to_cu {})
+    io.cu_wf_new(i).bits.num_thread_per_wf := Mux(splitter_num_thread > fifo.io.deq.bits.num_thread_per_wf, fifo.io.deq.bits.num_thread_per_wf, splitter_num_thread)
     io.cu_wf_new(i).bits.pds_base := splitter_pds_addr
     io.cu_wf_new(i).bits.lds_base := splitter_lds_addr
     io.cu_wf_new(i).bits.sgpr_base := splitter_sgpr_addr

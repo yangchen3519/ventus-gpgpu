@@ -104,9 +104,9 @@ class rtcache_writer(NUM_RESOURCE: Int, NUM_RT_RESULT: Int = CONFIG.RESOURCE_TAB
 
 class allocator extends Module {
   // Constants used in IO
-  val NUM_LDS = CONFIG.WG.NUM_LDS_MAX
-  val NUM_SGPR = CONFIG.WG.NUM_SGPR_MAX
-  val NUM_VGPR = CONFIG.WG.NUM_VGPR_MAX
+  val NUM_LDS  = CONFIG.GPU.NUM_LDS
+  val NUM_SGPR = CONFIG.GPU.NUM_SGPR
+  val NUM_VGPR = CONFIG.GPU.NUM_VGPR
   // IO
   val io = IO(new Bundle {
     val wgbuffer_wg_new = Flipped(DecoupledIO(new io_buffer2alloc))   // get new WG from WG buffer
@@ -149,24 +149,24 @@ class allocator extends Module {
   // =
 
   val rtcache_lds = RegInit(
-    VecInit.fill(NUM_CU)((new datatype_rtcache(NUM_RESOURCE = CONFIG.WG.NUM_LDS_MAX , NUM_RT_RESULT = NUM_RT_RESULT)).Lit(
-      c => c.size -> Vec.Lit((CONFIG.WG.NUM_LDS_MAX.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.WG.NUM_LDS_MAX+1).W))):_*),
+    VecInit.fill(NUM_CU)((new datatype_rtcache(NUM_RESOURCE = CONFIG.GPU.NUM_LDS , NUM_RT_RESULT = NUM_RT_RESULT)).Lit(
+      c => c.size -> Vec.Lit((CONFIG.GPU.NUM_LDS.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.GPU.NUM_LDS+1).W))):_*),
     ))
   )
   val rtcache_sgpr = RegInit(
-    VecInit.fill(NUM_CU)(new datatype_rtcache(NUM_RESOURCE = CONFIG.WG.NUM_SGPR_MAX, NUM_RT_RESULT = NUM_RT_RESULT).Lit(
-      c => c.size -> Vec.Lit((CONFIG.WG.NUM_SGPR_MAX.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.WG.NUM_SGPR_MAX+1).W))):_*),
+    VecInit.fill(NUM_CU)(new datatype_rtcache(NUM_RESOURCE = CONFIG.GPU.NUM_SGPR, NUM_RT_RESULT = NUM_RT_RESULT).Lit(
+      c => c.size -> Vec.Lit((CONFIG.GPU.NUM_SGPR.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.GPU.NUM_SGPR+1).W))):_*),
     ))
   )
   val rtcache_vgpr = RegInit(
-    VecInit.fill(NUM_CU)(new datatype_rtcache(NUM_RESOURCE = CONFIG.WG.NUM_VGPR_MAX, NUM_RT_RESULT = NUM_RT_RESULT).Lit(
-      c => c.size -> Vec.Lit((CONFIG.WG.NUM_VGPR_MAX.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.WG.NUM_VGPR_MAX+1).W))):_*),
+    VecInit.fill(NUM_CU)(new datatype_rtcache(NUM_RESOURCE = CONFIG.GPU.NUM_VGPR, NUM_RT_RESULT = NUM_RT_RESULT).Lit(
+      c => c.size -> Vec.Lit((CONFIG.GPU.NUM_VGPR.U +: Seq.fill(NUM_RT_RESULT-1)(0.U(log2Ceil(CONFIG.GPU.NUM_VGPR+1).W))):_*),
     ))
   )
 
-  val writer_lds = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.WG.NUM_LDS_MAX, NUM_RT_RESULT = NUM_RT_RESULT))
-  val writer_sgpr = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.WG.NUM_SGPR_MAX, NUM_RT_RESULT = NUM_RT_RESULT))
-  val writer_vgpr = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.WG.NUM_VGPR_MAX, NUM_RT_RESULT = NUM_RT_RESULT))
+  val writer_lds = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.GPU.NUM_LDS, NUM_RT_RESULT = NUM_RT_RESULT))
+  val writer_sgpr = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.GPU.NUM_SGPR, NUM_RT_RESULT = NUM_RT_RESULT))
+  val writer_vgpr = Module(new rtcache_writer(NUM_RESOURCE = CONFIG.GPU.NUM_VGPR, NUM_RT_RESULT = NUM_RT_RESULT))
   when(writer_lds.io.rtcache_wr_en)  { rtcache_lds(writer_lds.io.rtcache_wr_cuid)   := writer_lds.io.rtcache_wr_data  }
   when(writer_sgpr.io.rtcache_wr_en) { rtcache_sgpr(writer_sgpr.io.rtcache_wr_cuid) := writer_sgpr.io.rtcache_wr_data }
   when(writer_vgpr.io.rtcache_wr_en) { rtcache_vgpr(writer_vgpr.io.rtcache_wr_cuid) := writer_vgpr.io.rtcache_wr_data }

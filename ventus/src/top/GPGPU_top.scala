@@ -13,6 +13,7 @@ package top
 import chisel3._
 import chisel3.util._
 import chisel3.util.experimental.loadMemoryFromFile
+import chisel3.experimental.hierarchy.{Definition, Instance, instantiable, public, Instantiate}
 import parameters._
 import L1Cache.ICache._
 import L1Cache._
@@ -190,7 +191,9 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
-  val sm_wrapper=VecInit((0 until NSms).map(i => Module(new SM_wrapper(FakeCache, i, SV)).io))
+  val sm_wrapper_inst = Seq.tabulate(NSms) { i => Instantiate(new SM_wrapper(FakeCache, SV)) }
+  sm_wrapper_inst.zipWithIndex.foreach{ case (inst, i) => inst.sm_id := i.U }
+  val sm_wrapper = VecInit.tabulate(NSms)(i => sm_wrapper_inst(i).io)
   val l2cache=VecInit(Seq.fill(NL2Cache)( Module(new Scheduler(l2cache_params)).io))
   val sm2clusterArb = VecInit(Seq.fill(NCluster)(Module(new SM2clusterArbiter(l2cache_params_l)).io))
   val l2distribute = VecInit(Seq.fill(NCluster)(Module(new l2Distribute(l2cache_params_l)).io))
@@ -354,10 +357,12 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   }
 }
 
-class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVParam] = None) extends Module{
+@instantiable
+class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) extends Module{
   val param = (new MyConfig).toInstance
   class MMU_RVGParam(implicit val p: Parameters) extends HasRVGParameters
-  val io = IO(new Bundle{
+  @public val sm_id = IO(Input(UInt(8.W)))
+  @public val io = IO(new Bundle{
     val CTAreq=Flipped(Decoupled(new CTAreqData))
     val CTArsp=(Decoupled(new CTArspData))
     val memRsp = Flipped(DecoupledIO(new L1CacheMemRsp()(param)))
@@ -379,7 +384,8 @@ class SM_wrapper(FakeCache: Boolean = false, sm_id: Int = 0, SV: Option[mmu.SVPa
   val cta2warp=Module(new CTA2warp)
   cta2warp.io.CTAreq<>io.CTAreq
   cta2warp.io.CTArsp<>io.CTArsp
-  val pipe=Module(new pipe(sm_id))
+  val pipe=Module(new pipe())
+  pipe.sm_id := sm_id
   pipe.io.pc_reset:=true.B
   io.inst_cnt.foreach(_ := pipe.io.inst_cnt.getOrElse(0.U))
   io.inst_cnt2.foreach( _ := pipe.io.inst_cnt2.getOrElse(0.U))
@@ -533,7 +539,7 @@ if(MMU_ENABLED) {
     gvm_cta2warp.io.warp_req_fire := cta2warp.io.warpReq.fire
     gvm_cta2warp.io.software_wg_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wg_id.pad(32)
     gvm_cta2warp.io.software_warp_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(WF_ID_WIDTH-1,0).pad(32)
-    gvm_cta2warp.io.sm_id := sm_id.U(32.W)
+    gvm_cta2warp.io.sm_id := sm_id
     gvm_cta2warp.io.hardware_warp_id := cta2warp.io.warpReq.bits.wid.pad(32)
     gvm_cta2warp.io.sgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_sgpr_base_dispatch.pad(32)
     gvm_cta2warp.io.vgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_vgpr_base_dispatch.pad(32)
