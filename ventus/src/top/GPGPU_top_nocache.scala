@@ -16,8 +16,9 @@ class SMIO_icache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
 }
 
 @instantiable
-class SM_wrapper_nocache(val sm_id: Int = 0) extends Module {
+class SM_wrapper_nocache() extends Module {
   val param = (new MyConfig).toInstance
+  @public val sm_id = IO(Input(UInt(8.W)))
   @public val io = IO(new Bundle{
     val CTAreq = Flipped(Decoupled(new CTAreqData))
     val CTArsp = Decoupled(new CTArspData)
@@ -31,7 +32,8 @@ class SM_wrapper_nocache(val sm_id: Int = 0) extends Module {
   cta2warp.io.CTAreq :<>= io.CTAreq
   io.CTArsp :<>= cta2warp.io.CTArsp
 
-  val pipe = Module(new pipe(sm_id))
+  val pipe = Module(new pipe())
+  pipe.sm_id := sm_id
 
   val cnt = Counter(10)
   when(cnt.value < 5.U) { cnt.inc() }
@@ -95,7 +97,8 @@ class GPGPU_top_nocache() extends Module {
     val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
-  val sm_wrapper_inst = Seq.tabulate(num_sm) { i => Instantiate(new SM_wrapper_nocache(i)) }
+  val sm_wrapper_inst = Seq.tabulate(num_sm) { i => Instantiate(new SM_wrapper_nocache()) }
+  sm_wrapper_inst.zipWithIndex.foreach { case (sm, i) => sm.sm_id := i.U }
   val sm_wrapper = VecInit.tabulate(num_sm) { i => sm_wrapper_inst(i).io }
 
   cta.io.host2CTA :<>= io.host_req

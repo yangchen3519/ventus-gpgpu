@@ -30,7 +30,8 @@ class ICachePipeRsp_np extends Bundle{
   val status = UInt(2.W)
 }
 
-class pipe(val sm_id: Int = 0) extends Module{
+class pipe() extends Module{
+  val sm_id = IO(Input(UInt(8.W)))
   val io = IO(new Bundle{
     val icache_req = (DecoupledIO(new ICachePipeReq_np))
     val icache_rsp = Flipped(DecoupledIO(new ICachePipeRsp_np))
@@ -55,12 +56,12 @@ class pipe(val sm_id: Int = 0) extends Module{
   val warp_sche=Module(new warp_scheduler)
   //val pcfifo=Module(new PCfifo)
   val control=Module(new InstrDecodeV2)
-  control.io.sm_id := sm_id.U
+  control.io.sm_id := sm_id
   val operand_collector=Module(new operandCollector)
   if (GVM_ENABLED) {
     val gvm_xreg = Module(new GvmDutXReg)
     gvm_xreg.io.clock := clock
-    gvm_xreg.io.sm_id := sm_id.U(32.W)
+    gvm_xreg.io.sm_id := sm_id
     // gvm_xreg.io.num_bank := num_bank.U(32.W)
     // gvm_xreg.io.num_sgpr_slots := NUMBER_SGPR_SLOTS.U(32.W)
     val scalar_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_SGPR_SLOTS / num_bank * xLen).W)))
@@ -72,7 +73,7 @@ class pipe(val sm_id: Int = 0) extends Module{
 
     val gvm_vreg = Module(new GvmDutVReg)
     gvm_vreg.io.clock := clock
-    gvm_vreg.io.sm_id := sm_id.U(32.W)
+    gvm_vreg.io.sm_id := sm_id
     val vector_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_VGPR_SLOTS / num_bank * num_thread * xLen).W)))
     for (i <- 0 until num_bank) {
       vector_flatten_banks(i) := operand_collector.io.vectorBanks.get(i).asUInt
@@ -170,6 +171,13 @@ class pipe(val sm_id: Int = 0) extends Module{
   warp_sche.io.scoreboard_busy:=(VecInit(scoreb.map(_.delay))).asUInt
 
   csrfile.io.CTA2csr:=warp_sche.io.CTA2csr
+  val init_thread_mask = (1.U(num_thread.W) << warp_sche.io.CTA2csr.bits.CTAdata.dispatch2cu_wf_size_dispatch).asUInt - 1.U
+  simt_stack.io.initMask.valid := warp_sche.io.CTA2csr.valid
+  simt_stack.io.initMask.bits.warp_id := warp_sche.io.CTA2csr.bits.wid
+  simt_stack.io.initMask.bits.thread_mask := init_thread_mask
+  when(warp_sche.io.CTA2csr.fire){
+    printf(p"sm ${sm_id} warp ${Decimal(warp_sche.io.CTA2csr.bits.wid)} init thread mask 0x${Hexadecimal(init_thread_mask)}\n")
+  }
   operand_collector.io.sgpr_base:=csrfile.io.sgpr_base
   operand_collector.io.vgpr_base:=csrfile.io.vgpr_base
   warp_sche.io.warpReq<>io.warpReq
@@ -179,7 +187,7 @@ class pipe(val sm_id: Int = 0) extends Module{
   //flush:=(warp_sche.io.branch.fire&warp_sche.io.branch.bits.jump) | ()
   flush:=warp_sche.io.flush.valid
 
-  control.io.sm_id := sm_id.U(8.W)
+  control.io.sm_id := sm_id
   control.io.pc:=io.icache_rsp.bits.addr
   control.io.inst.zipWithIndex.foreach{ case (ins, i) =>
     ins := (io.icache_rsp.bits.data >> (xLen * i))(xLen - 1, 0)

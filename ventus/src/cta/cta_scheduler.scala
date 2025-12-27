@@ -65,9 +65,9 @@ trait ctainfo_alloc_to_cuinterface extends ctainfo_alloc_to_cuinterface_to_rt {
  *  CU-interface may update them into **WF** sgpr/vgpr/lds base address
  */
 trait ctainfo_alloc_to_cu extends Bundle {
-  val sgpr_base = UInt(log2Ceil(CONFIG.WG.NUM_SGPR_MAX).W)            // sgpr base address (initial WG, later WF)
-  val vgpr_base = UInt(log2Ceil(CONFIG.WG.NUM_VGPR_MAX).W)            // vgpr base address (initial WG, later WF)
-  val lds_base = UInt(log2Ceil(CONFIG.WG.NUM_LDS_MAX).W)              // lds  base address (initial WG, later WF)
+  val sgpr_base = UInt(log2Ceil(CONFIG.GPU.NUM_SGPR).W)            // sgpr base address (initial WG, later WF)
+  val vgpr_base = UInt(log2Ceil(CONFIG.GPU.NUM_VGPR).W)            // vgpr base address (initial WG, later WF)
+  val lds_base = UInt(log2Ceil(CONFIG.GPU.NUM_LDS).W)              // lds  base address (initial WG, later WF)
 }
 
 /** IO Bundle: CTA information

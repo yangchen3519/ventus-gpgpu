@@ -184,6 +184,9 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_THREAD = num_thread                  // Number of thread in each WF
       val MMU_ENABLE = MMU_ENABLED                 // if MMU will be used
       val ASID_WIDTH = MMU_ASID_WIDTH.W            // MMU ASID width
+      val NUM_SGPR = parameters.num_sgpr
+      val NUM_VGPR = parameters.num_vgpr
+      val NUM_LDS = sharemem_size
     }
     object KERNEL {
       val NUM_WG_MAX = NUM_WG                      // Max number of wg in each kernel
@@ -194,8 +197,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_THREAD_PER_WG_MAX   = NUM_THREAD_PER_WG   // Max number of thread in each **WG**
       val NUM_WF_MAX = num_warp_in_a_block         // Max number of wavefront in each workgroup(block)
       val NUM_LDS_MAX = sharemem_size              // Max number of LDS  occupied by a workgroup
-      val NUM_SGPR_MAX = num_sgpr                  // Max number of sgpr occupied by a workgroup
-      val NUM_VGPR_MAX = num_vgpr                  // Max number of vgpr occupied by a workgroup
+      val NUM_SGPR_MAX = 256                       // Max number of sgpr occupied by a workgroup
+      val NUM_VGPR_MAX = 256                       // Max number of vgpr occupied by a workgroup
       val NUM_PDS_MAX = 4096*num_thread            // Max number of PDS  occupied by a *wavefront*
       //val NUM_GDS_MAX = 1024                     // Max number of GDS  occupied by a workgroup, useless
 
