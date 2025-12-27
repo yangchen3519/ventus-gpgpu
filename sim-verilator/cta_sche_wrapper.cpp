@@ -82,9 +82,9 @@ bool Cta::apply_to_dut(Vdut* dut) {
         dut->io_host_req_bits_host_threadIdx_global_offset_y = threadIdx_offset.y;
         dut->io_host_req_bits_host_threadIdx_global_offset_z = threadIdx_offset.z;
         auto num_thread_local = kernel->get_num_thread_local_3d();
-        dut->io_host_req_bits_host_num_thread_per_wg_x = num_thread_local.x;
-        dut->io_host_req_bits_host_num_thread_per_wg_y = num_thread_local.y;
-        dut->io_host_req_bits_host_num_thread_per_wg_z = num_thread_local.z;
+        dut->io_host_req_bits_host_num_thread_per_wg_x = (num_thread_local.x > 0) ? num_thread_local.x : 1;
+        dut->io_host_req_bits_host_num_thread_per_wg_y = (num_thread_local.y > 0) ? num_thread_local.y : 1;
+        dut->io_host_req_bits_host_num_thread_per_wg_z = (num_thread_local.z > 0) ? num_thread_local.z : 1;
         dut->io_host_req_bits_host_num_wf = kernel->get_num_wf();
         dut->io_host_req_bits_host_wf_size = kernel->get_num_thread();
         dut->io_host_req_bits_host_lds_size_total = kernel->get_num_lds();

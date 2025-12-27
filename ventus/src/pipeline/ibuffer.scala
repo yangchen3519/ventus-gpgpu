@@ -168,7 +168,7 @@ class InstrBufferV2 extends Module{
       }
     }
     io.in.ready := mask_next === 0.U && io.out.ready
-    io.out.valid := mask_reg =/= 0.U
+    io.out.valid := mask_reg =/= 0.U && !io.flush
     io.out.bits := control_reg(ptr)
     if (GVM_ENABLED) {
       io.out.bits.spike_info.get.dispatch_id.get := dispatchCounter
