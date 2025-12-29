@@ -151,12 +151,14 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val idle :: flushing :: responding :: Nil = Enum(3)
   val FlushInvstateReg = RegInit(idle)
   val FlushInvstateReg_next = WireInit(FlushInvstateReg)
+  val fluInvReq_st0 = io.CoreReq.valid && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)
+  val fluInvStartOk_st0 = fluInvReq_st0 && io.MSHREmpty && io.SMSHREmpty
   FlushInvstateReg_next := FlushInvstateReg
   FlushInvstateReg := FlushInvstateReg_next
   when(FlushInvstateReg === idle){
-    when(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && CoreReqControl_st0.isFluInvL2){
+    when(fluInvStartOk_st0 && !io.hasDirty && CoreReqControl_st0.isFluInvL2){
       FlushInvstateReg_next := flushing
-  }.elsewhen(io.CoreReq.valid && !io.hasDirty && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)){
+  }.elsewhen(fluInvStartOk_st0 && !io.hasDirty){
     FlushInvstateReg_next := responding
   }
   }.elsewhen(FlushInvstateReg === flushing){
@@ -164,12 +166,14 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       FlushInvstateReg_next := responding
     }
   }.elsewhen(FlushInvstateReg === responding){
-    when(CoreReq_pipeReg_st0_st1.enq.ready){
+    when(CoreReq_pipeReg_st0_st1.enq.ready && io.CoreReq.valid){
       FlushInvstateReg_next := idle
     }
   }
-  io.flushDirty_tA := (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate) && (FlushInvstateReg_next === idle)
+  val flushDirtyReq_st0 = fluInvStartOk_st0 && io.hasDirty && (FlushInvstateReg_next === idle)
+  io.flushDirty_tA := flushDirtyReq_st0
   val FluInv_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush || CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
+  val FluInvReq_st1_valid = CoreReq_pipeReg_st0_st1.deq.valid && FluInv_st1
   val FluInvIsPut_st1 = CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === idle) && FluInv_st1
   val FluInvIsFluL2_st1 =  CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === flushing) && FluInv_st1
 
@@ -209,7 +213,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     st0_valid := false.B
     st0_ready := true.B
   }
-  io.invalidate_tA := (FlushInvstateReg === responding) && CoreReqControl_st0.isInvalidate
+  io.invalidate_tA := (FlushInvstateReg === responding) && FluInvReq_st1_valid && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
   io.st0_valid := st0_valid
   io.st0_ready := st0_ready
 
@@ -301,7 +305,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := SCLRexist
   }
-  io.read_Req_dA.valid := ReadHit_st1 || UCReqHitDirty || ((CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)&& io.hasDirty)
+  io.read_Req_dA.valid := ReadHit_st1 || UCReqHitDirty || flushDirtyReq_st0
 
   //missReq 2 mem, request type and data generator
   OpcodeGen.io.coreReqCtrl := Control_st1
@@ -336,7 +340,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // flu or inv mem req
   FluInvMemReq_st1.a_opcode := Mux(FluInvIsPut_st1,TLAOp_PutFull,TLAOp_Flush)
   FluInvMemReq_st1.a_param := Mux(FluInvIsPut_st1, 0.U, Mux(CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush, TLAParam_Flush, TLAParam_Inv))
-  FluInvMemReq_st1.a_addr.get := Cat(io.tA_dirtyTag_st1, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
+  val dirtySetIdx_st1 = RegNext(io.tA_dirtySetIdx_st0)
+  FluInvMemReq_st1.a_addr.get := Cat(io.tA_dirtyTag_st1, dirtySetIdx_st1, 0.U((WordLength - TagBits - SetIdxBits).W))
   FluInvMemReq_st1.a_data := io.dA_data
   FluInvMemReq_st1.a_source := DontCare
   FluInvMemReq_st1.hasCoreRsp := false.B
@@ -541,4 +546,3 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.CoreRsp <> CoreRsp_st3.io.deq
   io.st2_ready := CoreRsp_st3.io.enq.ready
 }
-
