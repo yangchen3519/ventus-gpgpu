@@ -163,7 +163,7 @@ $(VLIB_TARGET): $(VLIB_VERILATOR_OUTPUT)
 	  $(VLIB_OBJ_EXPORT) \
 	  $(VLIB_DIR_BUILDOBJ)/libVdut.a $(VLIB_DIR_BUILDOBJ)/libverilated.a \
 	  -lspdlog -lfmt -pthread -lpthread -lz -latomic  
-	ln -sf $(abspath $(VLIB_TARGET)) $(VLIB_DIR_BUILD)/libVentusRTL.so
+	ln -sf $(abspath $(VLIB_TARGET)) $(VLIB_DIR_BUILD)/lib$(VLIB_TARGET_NAME).so
 
 lib: $(VLIB_TARGET)
 
@@ -179,6 +179,7 @@ info-verilator:
 install: $(VLIB_TARGET)
 	install -d $(PREFIX)/lib
 	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/
+	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/lib$(VLIB_TARGET_NAME)-withcache.so
 	install -d $(PREFIX)/include
 	install -m 644 ventus_rtlsim.h $(PREFIX)/include/
 
