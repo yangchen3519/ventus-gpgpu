@@ -114,13 +114,14 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.memRspIsFlu      := memRspPipe.io.memRspIsFlu
   //-----------core req pipe output connection------------
   // st0
+  val st0_fire = coreReqPipe.io.st0_valid && coreReqPipe.io.st0_ready
   MshrAccess.io.probe.bits            := coreReqPipe.io.Probe_MSHR
-  MshrAccess.io.probe.valid           := coreReqPipe.io.st0_valid
+  MshrAccess.io.probe.valid           := st0_fire
   if(MMU_ENABLED){
     MshrAccess.io.probeAsid.get  := coreReqPipe.io.probeAsid.get
   }
   TagAccess.io.probeRead.bits         := coreReqPipe.io.Probe_tA
-  TagAccess.io.probeRead.valid        := coreReqPipe.io.st0_valid
+  TagAccess.io.probeRead.valid        := st0_fire
   ReplayTable.io.RTABReq_st0     <> coreReqPipe.io.Req_st0_RTAB
   TagAccess.io.invalidateAll     := coreReqPipe.io.invalidate_tA
   TagAccess.io.flushChoosen.get  := coreReqPipe.io.flushDirty_tA
