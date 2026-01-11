@@ -59,6 +59,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     })
     // st0
     val MemRsp_pipeReg_st0_st1 = Module(new Queue(new memRspPipe_st1,entries = 1,flow=false,pipe=true)).io
+    val MSHRData_pipeReg = Module(new Queue(new DCacheMemRsp, entries = 1, flow = false, pipe = true)).io
 
     val st0_ready = Wire(Bool())
     val st0_valid = Wire(Bool())
@@ -117,7 +118,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
        }.elsewhen(memRspisWrite){
            st0_valid := false.B
        }.elsewhen(memRspisLRSC || memRspisAMO){
-           st0_valid := io.SMSHRMissRsp.ready // to check
+           st0_valid := io.memRsp.valid // to check
        }.elsewhen(memRspisRead){
            st0_valid := io.memRsp.valid
        }
@@ -127,6 +128,10 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
     MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisLRSC || memRspisAMO
     MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
+
+    // MSHRData pipe reg: enq 条件和 MSHRMissRspIn 一样
+    MSHRData_pipeReg.enq.valid := io.MSHRMissRsp.valid
+    MSHRData_pipeReg.enq.bits := io.memRsp.bits
 
     missRspTI_st1 := Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.bits.targetInfo.asTypeOf(new VecMshrTargetInfo),
@@ -139,12 +144,16 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     }
     io.MSHRMissRspOut.ready := io.memRsp_coreRsp.ready
     io.SMSHRMissRspOut.ready := io.memRsp_coreRsp.ready
+    // MSHRData pipe reg: deq 条件和 MSHRMissRspOut 一样
+    MSHRData_pipeReg.deq.ready := io.MSHRMissRspOut.ready
     // ---st1---
     // coreRsp
     io.memRsp_coreRsp.valid := Mux(MemRsp_pipeReg_st0_st1.deq.bits.isSpecial,
         io.SMSHRMissRspOut.valid,
         io.MSHRMissRspOut.valid)
-    io.memRsp_coreRsp.bits.Rsp.data := MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data
+    io.memRsp_coreRsp.bits.Rsp.data := Mux(memRsp_st1_isSpecial,
+        MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data,
+        MSHRData_pipeReg.deq.bits.d_data)
     io.memRsp_coreRsp.bits.Rsp.isWrite := false.B
     io.memRsp_coreRsp.bits.Rsp.instrId := missRspTI_st1.instrId
     io.memRsp_coreRsp.bits.Rsp.activeMask := missRspTI_st1.perLaneAddr.map(_.activeMask)

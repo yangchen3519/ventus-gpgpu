@@ -67,6 +67,19 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   }
   val DataAccessRRsp = DataAccesses.map(d => d.io.r.resp.data)
   val DataAccessReadSRAMRRsp = DataAccessRRsp.map(d => Cat(d.reverse))
+  val replaceMemReqFire = Wire(Bool())
+  val replaceReadResp = RegNext(memRspPipe.io.dAReplace_rReq_valid, false.B)
+  val replaceDataValid = RegInit(false.B)
+  val replaceDataReg = Reg(Vec(BlockWords, UInt(WordLength.W)))
+  val replaceAddrReg = Reg(UInt(WordLength.W))
+  when(replaceReadResp){
+    replaceDataReg := VecInit(DataAccessReadSRAMRRsp)
+    replaceAddrReg := RegNext(TagAccess.io.a_addrReplacement_st1.get)
+    replaceDataValid := true.B
+  }
+  when(replaceMemReqFire){
+    replaceDataValid := false.B
+  }
 
   io.memRsp <> memRsp_Q.io.enq
   // core request arbiter
@@ -179,6 +192,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   MemReqArb.io.in(1) <> coreReqPipe.io.MissReq_Mem
   MemReqArb.io.in(0).valid := memRspPipe.io.memReq_valid
   MemReqArb.io.in(0).bits := dirtyReplaceMemReq
+  replaceMemReqFire := MemReqArb.io.in(0).fire
   memReq_Q.io.enq <> MemReqArb.io.out
   // todo NOT right!!
   RTAB_pushedIdx_st2.io.enq.valid := MemReqArb.io.out.valid
@@ -187,12 +201,14 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   dirtyReplaceMemReq.a_opcode := 0.U//PutFullData
   dirtyReplaceMemReq.a_param := 0.U//regular write
   dirtyReplaceMemReq.a_source := DontCare//wait for WSHR
-  dirtyReplaceMemReq.a_addr.get := RegNext(TagAccess.io.a_addrReplacement_st1.get)
+  val replaceDataSel = Mux(replaceDataValid, replaceDataReg, VecInit(DataAccessReadSRAMRRsp))
+  val replaceAddrSel = Mux(replaceDataValid, replaceAddrReg, RegNext(TagAccess.io.a_addrReplacement_st1.get))
+  dirtyReplaceMemReq.a_addr.get := replaceAddrSel
   if(MMU_ENABLED){
     dirtyReplaceMemReq.Asid.get := RegNext(TagAccess.io.asidReplacement_st1.get)
   }
   dirtyReplaceMemReq.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
-  dirtyReplaceMemReq.a_data := DataAccessReadSRAMRRsp//wait for data SRAM in next cycle
+  dirtyReplaceMemReq.a_data := replaceDataSel//wait for data SRAM in next cycle
   dirtyReplaceMemReq.hasCoreRsp := false.B
   dirtyReplaceMemReq.coreRspInstrId := DontCare
   dirtyReplaceMemReq.spike_info.foreach{ _ := DontCare }
