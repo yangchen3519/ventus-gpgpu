@@ -49,12 +49,17 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
 
          val dAmemRsp_wReq         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
          val dAmemRsp_wReq_valid   = Output(Bool())
+         // dAmemRsp_wReq_valid 拉高时，对应的写回 cacheline blockAddr（tag+set），用于 coreReqPipe 做同拍冲突规避
+         val dAmemRsp_wReq_blockAddr = Output(UInt(bABits.W))
+         val dAmemRsp_wReq_asid = if(MMU_ENABLED) Some(Output(UInt(asidLen.W))) else None
          val dAReplace_rReq        = Output(Vec(BlockWords, new SRAMBundleA(NSets * NWays)))
          val dAReplace_rReq_valid  = Output(Bool())
          val memReq_valid          = Output(Bool())
          val tAWayMask             = Input(UInt(NWays.W))
          val needReplace           = Input(Bool())
          val memReq_ready          = Input(Bool())
+         // dirty replace 期间禁止 core 新请求进入，避免 victim line 仍可 write-hit
+         val blockCoreReq          = Output(Bool())
 
     })
     // st0
@@ -70,6 +75,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val memRspisFlushOrInv = io.memRsp.bits.d_opcode === 2.U
     val memRspisLRSC = io.memRsp.bits.d_opcode === 1.U && (get_Type(io.memRsp.bits.d_source) === 2.U)
     val memRspisAMO  = io.memRsp.bits.d_opcode === 1.U && (get_Type(io.memRsp.bits.d_source) === 2.U)
+    val memRspisSpecial = memRspisLRSC || memRspisAMO
     io.memRsp.ready := st0_ready
     // st1
     val missRspTI_st1 = Wire(new VecMshrTargetInfo)
@@ -77,14 +83,15 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val memRsp_st1_isSpecial = MemRsp_pipeReg_st0_st1.deq.bits.isSpecial
     val dAReq_valid = Wire(Bool())
     val st1_ready = Wire(Bool())
+    val tAAllocateWriteReq_valid = WireInit(false.B)
 
     // -----st0-----
     io.memRspIsFlu := memRspisFlushOrInv && io.memRsp.valid
-    io.tAAllocateWriteReq.valid := io.memRsp.valid && io.memRsp.bits.d_opcode === 1.U && io.memRsp.bits.d_param === 0.U && !io.MSHRMissRspOutUCached// CACHED READ RESPONSE
+    io.tAAllocateWriteReq.valid := tAAllocateWriteReq_valid
     io.tAAllocateWriteReq.bits.setIdx := io.memRsp.bits.d_source(SetIdxBits-1,0)
     io.MSHRMissRsp.valid := io.memRsp.valid && memRspisRead
     io.MSHRMissRsp.bits.instrId := idx_st0
-    io.SMSHRMissRsp.valid := io.memRsp.valid && (memRspisLRSC || memRspisAMO)
+    io.SMSHRMissRsp.valid := io.memRsp.valid && memRspisSpecial
     io.SMSHRMissRsp.bits.instrId := idx_st0
 
     io.RTABUpdateReq.bits.mshrIdx := idx_st0
@@ -93,6 +100,8 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     io.RTABUpdateReq.bits.updateType := 0.U
     io.RTABUpdateReq.valid := RTABUpdateReq_valid
     io.WSHRPopReq.bits := idx_st0
+    // Write responses are always accepted in st0 (st0_ready := true), so pop can be driven by valid only.
+    // Using memRsp.fire here introduces structural ready->valid paths that can form combinational cycles.
     io.WSHRPopReq.valid := io.memRsp.valid && memRspisWrite
 
     when(memRspisLRSC || memRspisAMO){
@@ -105,11 +114,11 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
         st0_ready := true.B      
     }.elsewhen(memRspisWrite){
         st0_ready := true.B
-    }.elsewhen(memRspisLRSC || memRspisAMO){
-        st0_ready := io.SMSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
-    }.elsewhen(memRspisRead){
-        st0_ready := io.MSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
-    }
+	    }.elsewhen(memRspisSpecial){
+	        st0_ready := io.SMSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
+	    }.elsewhen(memRspisRead){
+	        st0_ready := io.MSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
+	    }
     RTABUpdateReq_valid := io.memRsp.valid && st0_ready
     st0_valid := false.B
     when(io.memRsp.valid){
@@ -117,21 +126,26 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
            st0_valid :=  false.B      
        }.elsewhen(memRspisWrite){
            st0_valid := false.B
-       }.elsewhen(memRspisLRSC || memRspisAMO){
+       }.elsewhen(memRspisSpecial){
            st0_valid := io.memRsp.valid // to check
        }.elsewhen(memRspisRead){
            st0_valid := io.memRsp.valid
        }
     }
-    MemRsp_pipeReg_st0_st1.enq.valid := st0_valid
+    MemRsp_pipeReg_st0_st1.enq.valid := st0_valid && io.MSHRMissRsp.ready
     MemRsp_pipeReg_st0_st1.enq.bits.Rsp := io.memRsp.bits
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
     MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisLRSC || memRspisAMO
     MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
+    // Issue TagAccess allocateWrite only when the response is actually accepted into MemRsp_pipeReg_st0_st1.
+    // This prevents the next memRsp (already visible at memRsp_Q head after a previous fire) from overwriting
+    // allocate context while the current response is still being processed (e.g. dirty replace FSM busy).
+    val memRspEnqFire = st0_valid && MemRsp_pipeReg_st0_st1.enq.ready
+    tAAllocateWriteReq_valid := memRspEnqFire && memRspisRead && !io.MSHRMissRspOutUCached // cached read response
 
-    // MSHRData pipe reg: enq 条件和 MSHRMissRspIn 一样
-    MSHRData_pipeReg.enq.valid := io.MSHRMissRsp.valid
-    MSHRData_pipeReg.enq.bits := io.memRsp.bits
+	    // MSHRData pipe reg: enq 条件和 MSHRMissRspIn 一样
+	    MSHRData_pipeReg.enq.valid := io.MSHRMissRsp.valid
+	    MSHRData_pipeReg.enq.bits := io.memRsp.bits
 
     missRspTI_st1 := Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.bits.targetInfo.asTypeOf(new VecMshrTargetInfo),
@@ -169,17 +183,36 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val tagRequestStatus = RegInit(idle)
     val tagRequestStatus_next = WireInit(tagRequestStatus)
     val st1_valid = MemRsp_pipeReg_st0_st1.deq.valid && MemRsp_pipeReg_st0_st1.deq.bits.isRead && MemRsp_pipeReg_st0_st1.deq.bits.isCached
+    val needReplace_pulse = io.needReplace && st1_valid
+    val needReplace_pending = RegInit(false.B)
+    val needReplace_eff = needReplace_pending || needReplace_pulse
+    // needReplace_pulse 拉高后，到本次 allocate 写回(tag/data)完成前，屏蔽 core 新请求注入
+    val blockCoreReqReg = RegInit(false.B)
+    when(needReplace_pulse){
+      blockCoreReqReg := true.B
+    }.elsewhen(blockCoreReqReg && dAReq_valid){
+      blockCoreReqReg := false.B
+    }
+    io.blockCoreReq := blockCoreReqReg || needReplace_pulse
+    val allocateSetIdx_st1 = RegInit(0.U(SetIdxBits.W))
+    when(io.tAAllocateWriteReq.valid){
+      allocateSetIdx_st1 := io.tAAllocateWriteReq.bits.setIdx
+    }
+    val replaceSetIdx = RegInit(0.U(SetIdxBits.W))
+    val replaceWayMask = RegInit(0.U(NWays.W))
+    val replaceSetIdx_eff = Mux(needReplace_pending, replaceSetIdx, allocateSetIdx_st1)
+    val replaceWayMask_eff = Mux(needReplace_pending, replaceWayMask, io.tAWayMask)
     st1_ready := io.memRsp_coreRsp.ready
     tagRequestStatus := tagRequestStatus_next
     tagRequestStatus_next := tagRequestStatus
     switch(tagRequestStatus){
         is(idle){
-            when(io.needReplace && st1_valid){
+            when(needReplace_eff && st1_valid){
                 tagRequestStatus_next := dAread
-            }.elsewhen(st1_valid && !io.needReplace){
+            }.elsewhen(st1_valid && !needReplace_eff){
                 tagRequestStatus_next := tagRequestStatus
             }
-          when(io.needReplace){
+          when(needReplace_eff){
             st1_ready := false.B
           }.otherwise{
             st1_ready := io.memRsp_coreRsp.ready
@@ -190,7 +223,10 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
                 st1_ready := false.B
         }
         is(memReq){
-            when(io.memReq_ready){
+            when(needReplace_eff && st1_valid && io.memReq_ready){
+                tagRequestStatus_next := dAread
+                st1_ready := false.B
+            }.elsewhen(io.memReq_ready){
                 tagRequestStatus_next := idle
                 st1_ready := io.memRsp_coreRsp.ready
             }.otherwise{
@@ -198,10 +234,23 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
             }
         }
     }
+    when(tagRequestStatus_next === dAread && st1_valid){
+        needReplace_pending := false.B
+    }.elsewhen(needReplace_pulse){
+        needReplace_pending := true.B
+    }
+    when(needReplace_pulse && !needReplace_pending){
+        replaceSetIdx := allocateSetIdx_st1
+        replaceWayMask := io.tAWayMask
+    }
     MemRsp_pipeReg_st0_st1.deq.ready := st1_ready
     io.dAmemRsp_wReq_valid := dAReq_valid
-    io.dAReplace_rReq.foreach(_.setIdx := Cat(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_source(SetIdxBits-1,0),OHToUInt(io.tAWayMask)))
-    dAReq_valid := tagRequestStatus === idle && st1_valid && st1_ready
+    io.dAmemRsp_wReq_blockAddr := get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
+    if(MMU_ENABLED){
+      io.dAmemRsp_wReq_asid.get := missRspAsid_st1.get
+    }
+    io.dAReplace_rReq.foreach(_.setIdx := Cat(replaceSetIdx_eff, OHToUInt(replaceWayMask_eff)))
+    dAReq_valid := st1_valid && st1_ready
     io.dAReplace_rReq_valid := tagRequestStatus_next === dAread && st1_valid
     io.memReq_valid := tagRequestStatus === memReq && st1_valid
 }

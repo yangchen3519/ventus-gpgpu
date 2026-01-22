@@ -241,7 +241,10 @@ class Scheduler(params: InclusiveCacheParameters_lite) extends Module
 
 
 
-  val dir_result_buffer=Module(new Queue(new DirectoryResult_lite_victim(params),1))
+  // 允许在同一拍同时出队+入队时保持 1/cycle 吞吐（pipe=true）。
+  // 这样在 invalidate/flush 扫描出现连续 dirty victim、且 directory.result 只拉高一拍的情况下，
+  // 不会因为 1-depth 且 pipe=false 的 Queue 满队列阻塞而导致后一个结果握手失败/丢失。
+  val dir_result_buffer = Module(new Queue(new DirectoryResult_lite_victim(params), 1, pipe = true))
 
   dir_result_buffer.io.enq.valid:= directory.io.result.valid && (directory.io.result.bits.hit || directory.io.result.bits.dirty || directory.io.result.bits.last_flush) //hit or miss dirty, sourceD don't care if dirty when hit
   dir_result_buffer.io.enq.bits:=directory.io.result.bits

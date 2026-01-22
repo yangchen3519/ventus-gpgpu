@@ -282,16 +282,19 @@ if(MMU_ENABLED) {
   cachehit_hold.io.enq.valid := probeReadBuf.valid && !probeReadBuf.ready
   cachehit_hold.io.deq.ready := probeReadBuf.ready
   //val cachehit_hold = RegNext(iTagChecker.io.cache_hit && probeReadBuf.valid && !probeReadBuf.ready)
-  io.hit_st1 := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid//RegNext(io.probeRead.fire) //todo remove
-  io.hitStatus_st1.hit := (iTagChecker.io.cache_hit || cachehit_hold.io.deq.bits.hit && cachehit_hold.io.deq.valid) && probeReadBuf.valid
-  io.hitStatus_st1.waymask := Mux(cachehit_hold.io.deq.valid && cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
-  io.hitStatus_st1.isDirty := way_dirty(probeReadBuf.bits.setIdx)(OHToUInt(iTagChecker.io.waymask))
+  val holdValid_st1 = cachehit_hold.io.deq.valid
+  val hit_st1_raw = Mux(holdValid_st1, cachehit_hold.io.deq.bits.hit, iTagChecker.io.cache_hit)
+  val waymask_st1_raw = Mux(holdValid_st1, cachehit_hold.io.deq.bits.waymask, iTagChecker.io.waymask)
+  io.hit_st1 := hit_st1_raw && probeReadBuf.valid//RegNext(io.probeRead.fire) //todo remove
+  io.hitStatus_st1.hit := hit_st1_raw && probeReadBuf.valid
+  io.hitStatus_st1.waymask := waymask_st1_raw
+  io.hitStatus_st1.isDirty := way_dirty(probeReadBuf.bits.setIdx)(OHToUInt(waymask_st1_raw))
   io.hitStatus_st1.tag := tagBodyAccess.io.r.resp.data(OHToUInt(io.hitStatus_st1.waymask))
-  io.waymaskHit_st1 := Mux(cachehit_hold.io.deq.valid & cachehit_hold.io.deq.bits.hit,cachehit_hold.io.deq.bits.waymask,iTagChecker.io.waymask)
+  io.waymaskHit_st1 := waymask_st1_raw
   if(!readOnly){//tag_array::write_hit_mark_dirty
     //assert(!(iTagChecker.io.cache_hit && io.probeIsWrite_st1.get && io.flushChoosen.get),"way_dirty write-in conflict!")
     when(io.hitStatus_st1.hit && io.probeIsWrite_st1.get){////meta_entry_t::write_dirty
-      way_dirty(RegNext(io.probeRead.bits.setIdx))(OHToUInt(iTagChecker.io.waymask)) := true.B
+      way_dirty(RegNext(io.probeRead.bits.setIdx))(OHToUInt(io.hitStatus_st1.waymask)) := true.B
     }.elsewhen(io.flushChoosen.get){//tag_array::flush_one
       way_dirty(choosenDirtySetIdx_st0)(OHToUInt(choosenDirtyWayMask_st0)) := false.B
     }.elsewhen(io.needReplace.get) {

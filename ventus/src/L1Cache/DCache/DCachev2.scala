@@ -57,11 +57,12 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val MemReqArb = Module(new Arbiter(new WshrMemReq, 2))
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
   val dirtyReplaceMemReq = Wire(new WshrMemReq)
+  val coreWriteHitFire = coreReqPipe.io.st1_valid && coreReqPipe.io.st1_ready && coreReqPipe.io.WriteHit_st1
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
       memRspPipe.io.dAReplace_rReq(i), coreReqPipe.io.read_Req_dA.bits(i))
-    DataAccesses(i).io.w.req.valid := coreReqPipe.io.WriteHit_st1 && coreReqPipe.io.WriteReq_dA_valid(i) || memRspPipe.io.dAmemRsp_wReq_valid
+    DataAccesses(i).io.w.req.valid := (coreWriteHitFire && coreReqPipe.io.WriteReq_dA_valid(i)) || memRspPipe.io.dAmemRsp_wReq_valid
     DataAccesses(i).io.w.req.bits := Mux(memRspPipe.io.dAmemRsp_wReq_valid,
       memRspPipe.io.dAmemRsp_wReq(i), coreReqPipe.io.WriteReq_dA(i))
   }
@@ -84,9 +85,22 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   io.memRsp <> memRsp_Q.io.enq
   // core request arbiter
   // source: RTAB top request / core request from io
-  CoreReqArb.io.in(0) <> ReplayTable.io.coreReq_replay
-  CoreReqArb.io.in(1) <> io.coreReq
-  io.coreReq.ready := CoreReqArb.io.in(1).ready && !ReplayTable.io.RTAB_full
+  val blockCoreReq = memRspPipe.io.blockCoreReq
+  CoreReqArb.io.in(0).valid := ReplayTable.io.coreReq_replay.valid && !blockCoreReq
+  CoreReqArb.io.in(0).bits  := ReplayTable.io.coreReq_replay.bits
+  ReplayTable.io.coreReq_replay.ready := CoreReqArb.io.in(0).ready && !blockCoreReq
+  // IMPORTANT：保证 Decoupled 握手语义一致。
+  // RTAB 满时不仅要拉低顶层 ready，也必须 gate 掉 in(1).valid，否则外部未 fire 但 arbiter 可能内部 fire，
+  // 导致同一条外部请求被重复注入 st0。
+  // 另外：当 RTAB 仅剩 1 个空位（almost_full）且本拍 st1 仍会向 RTAB 入队时，也要拉低 ready，
+  // 否则可能出现“本拍占掉最后一个空位 + 同拍再接收下一条 coreReq，下一拍该 coreReq 也要入 RTAB -> 溢出”的情况。
+  val allowIn1 =
+    !ReplayTable.io.RTAB_full &&
+      !(ReplayTable.io.RTAB_almost_full && coreReqPipe.io.Req_st1_RTAB.valid) &&
+      !blockCoreReq
+  CoreReqArb.io.in(1).valid := io.coreReq.valid && allowIn1
+  CoreReqArb.io.in(1).bits  := io.coreReq.bits
+  io.coreReq.ready := CoreReqArb.io.in(1).ready && allowIn1
   //---------coreReqPipe input connection------------
   // st0
   coreReqPipe.io.CoreReq                <> CoreReqArb.io.out
@@ -98,6 +112,17 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.tA_dirtyWayMask_st0    := TagAccess.io.dirtyWayMask_st0.get
   coreReqPipe.io.reqSource              := CoreReqArb.io.out.valid && ReplayTable.io.coreReq_replay.valid
   coreReqPipe.io.Probe_tA_ready         := TagAccess.io.probeRead.ready
+  coreReqPipe.io.blockCoreReq           := blockCoreReq
+  coreReqPipe.io.refillWrite_valid      := memRspPipe.io.dAmemRsp_wReq_valid
+  coreReqPipe.io.refillWrite_blockAddr  := memRspPipe.io.dAmemRsp_wReq_blockAddr
+  if(MMU_ENABLED){
+    coreReqPipe.io.refillWrite_asid.get := memRspPipe.io.dAmemRsp_wReq_asid.get
+  }
+  coreReqPipe.io.mshrReleasing_valid     := MshrAccess.io.releasing_valid
+  coreReqPipe.io.mshrReleasing_blockAddr := MshrAccess.io.releasing_blockAddr
+  if(MMU_ENABLED){
+    coreReqPipe.io.mshrReleasing_asid.get := MshrAccess.io.releasing_asid.get
+  }
   // st1
   coreReqPipe.io.tA_Hit_st1             := TagAccess.io.hitStatus_st1
   if(MMU_ENABLED){

@@ -38,6 +38,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val tA_dirtySetIdx_st0 = Input(UInt(dcache_SetIdxBits.W))
     val tA_dirtyWayMask_st0= Input(UInt(dcache_NWays.W))
     val reqSource      = Input(Bool()) // 1- from RTAB 0 - from io
+    // dirty replace 期间暂停 coreReqPipe，避免 victim line write-hit 干扰写回数据
+    val blockCoreReq   = Input(Bool())
+    // memRspPipe 正在对 dA 写回(refill)时的 blockAddr，用于规避与 st0 同拍访问同一 cacheline
+    val refillWrite_valid = Input(Bool())
+    val refillWrite_blockAddr = Input(UInt(bABits.W))
+    val refillWrite_asid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
+    // MSHR missRspIn 处理期间的“原子态”指示：同拍 mshrStatus 尚未更新，外部不应插入同块的 secondary miss
+    val mshrReleasing_valid = Input(Bool())
+    val mshrReleasing_blockAddr = Input(UInt(bABits.W))
+    val mshrReleasing_asid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
 
     val Probe_MSHR     = Output(new MSHRprobe(bABits, asidLen))
     val probeAsid      = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
@@ -134,6 +144,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   Control.io.param  := io.CoreReq.bits.param
 
   val BlockAddr_st0 = Cat(io.CoreReq.bits.tag, io.CoreReq.bits.setIdx)
+  val refillSameBlock_st0 =
+    io.refillWrite_valid &&
+      (io.refillWrite_blockAddr === BlockAddr_st0) &&
+      (if(MMU_ENABLED) (io.refillWrite_asid.get === io.CoreReq.bits.asid.get) else true.B)
 
   //output bits
   io.Probe_MSHR.blockAddr := BlockAddr_st0
@@ -184,8 +198,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(!(io.RTABHit && !io.reqSource)){
     // probe SMSHR MSHR and tag
     when(CoreReqControl_st0.isRead || CoreReqControl_st0.isWrite|| CoreReqControl_st0.isAMO || CoreReqControl_st0.isLR || CoreReqControl_st0.isSC){
-      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready
-      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready
+      // refill 同拍写回同一 cacheline 时，禁止 st0 握手进入流水，避免 miss 与 refill 同拍导致 MSHR 卡死
+      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready && !refillSameBlock_st0
+      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready && !refillSameBlock_st0
     }.elsewhen(CoreReqControl_st0.isWaitMSHR){
       //wait until MSHR empty
       st0_valid  := io.CoreReq.valid && io.MSHREmpty && io.SMSHREmpty
@@ -213,6 +228,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     st0_valid := false.B
     st0_ready := true.B
   }
+  when(io.blockCoreReq){
+    st0_valid := false.B
+    st0_ready := false.B
+  }
   io.invalidate_tA := (FlushInvstateReg === responding) && FluInvReq_st1_valid && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
   io.st0_valid := st0_valid
   io.st0_ready := st0_ready
@@ -221,6 +240,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // =============
   // st1 pipe reg
   val BlockAddr_st1 = Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
+  val mshrReleasingSameBlock_st1 =
+    io.mshrReleasing_valid &&
+      (io.mshrReleasing_blockAddr === BlockAddr_st1) &&
+      (if(MMU_ENABLED) (io.mshrReleasing_asid.get === CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get) else true.B)
   CoreReq_pipeReg_st0_st1.enq.valid := st0_valid
   CoreReq_pipeReg_st0_st1.enq.bits.Req := io.CoreReq.bits
   CoreReq_pipeReg_st0_st1.enq.bits.Ctrl := CoreReqControl_st0
@@ -377,7 +400,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val mshrMissReqTI = Wire(new VecMshrTargetInfo)
   mshrMissReqTI.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
   mshrMissReqTI.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
-  io.MissReq_MSHR.valid := ReadMiss_st1 && CoreReq_pipeReg_st0_st1.deq.valid && !Req_RTAB_st1_valid
+  // 只在 st1 真正握手（deq.fire）时才允许向 MSHR 注入 missReq，避免 st1 停住但 MSHR 侧发生握手导致状态不一致
+  io.MissReq_MSHR.valid := ReadMiss_st1 && CoreReq_pipeReg_st0_st1.deq.fire && !Req_RTAB_st1_valid
   io.MissReq_MSHR.bits.blockAddr := BlockAddr_st1
   io.MissReq_MSHR.bits.targetInfo := mshrMissReqTI.asUInt
   io.MissReq_MSHR.bits.instrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
@@ -404,7 +428,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(!(Req_RTAB_st1_valid || ReplayType === UCacheHitDirty)) { // when not request RTAB
     when(Control_st1.isRead || Control_st1.isWrite) {
       when(io.tA_Hit_st1.hit) {
-          when(CoreRsp_pipeReg_st1_st2.enq.ready && io.Mshr_st1_ready) { //todo check ready condition
+          // 命中路径不应被 MSHR miss 分配 ready 阻塞。
+          // 当前 io.Mshr_st1_ready 由 MSHR.missReq.ready 驱动，只反映 miss 分配能力，不代表 hit 处理能力。
+          when(CoreRsp_pipeReg_st1_st2.enq.ready) { //todo check ready condition
             when(UCReqHitDirty){ // uncached read hit dirty will write back to mem and rsp to core
               st1_ready := !io.memRsp_coreRsp.valid && io.MissReq_Mem.ready && (evictstateReg === evictrsp)
             }.otherwise{
@@ -426,7 +452,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
             st1_ready := false.B
           }
         }.otherwise { //isWrite
-         when(CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
+         when(!io.memRsp_coreRsp.valid && CoreRsp_pipeReg_st1_st2.enq.ready && io.MissReq_Mem.ready && io.Mshr_st1_ready) { //memReq_Q.io.enq.ready
             st1_ready := true.B
           }.otherwise{
             st1_ready := false.B
@@ -439,7 +465,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       when(FlushInvstateReg === idle || FlushInvstateReg === flushing){
         st1_ready := io.MissReq_Mem.ready
       }.otherwise{
-        st1_ready := CoreRsp_pipeReg_st1_st2.enq.ready
+        st1_ready := CoreRsp_pipeReg_st1_st2.enq.ready && !io.memRsp_coreRsp.valid
       }
     }.otherwise{st1_ready := true.B}
   }.otherwise{// when requesting RTAB
@@ -448,6 +474,12 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     }.otherwise{
       st1_ready := true.B
     }
+  }
+  when(io.blockCoreReq){
+    st1_ready := false.B
+  }
+  when(CoreReq_pipeReg_st0_st1.deq.valid && mshrReleasingSameBlock_st1){
+    st1_ready := false.B
   }
   //write hit
   val getBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
@@ -517,7 +549,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits := DontCare
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
   }
-  io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.deq.ready
+  val coreRspPipeEnqFromCoreReq =
+    (st1_valid && st1_ready && (CacheHit_st1 || WriteMiss_st1)) ||
+      (st1_valid && st1_ready && (FlushInvstateReg === responding))
+  io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.enq.ready && !coreRspPipeEnqFromCoreReq
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid
   CoreRsp_pipeReg_st1_st2.deq.ready := coreReq_st2_ready
   //== st2 ==

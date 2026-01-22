@@ -121,6 +121,10 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     // stall the core req when releasing the mshr primary entry
     //TODO 真正的需要stall的场景时当release的primary entry和当前coreReq的blockAddr相同
     val releasing_stall = Output(Bool())
+    // missRspIn 处理期间的“原子态”指示：同拍 mshrStatus/valid 尚未更新，外部不应插入同块的 secondary miss
+    val releasing_valid = Output(Bool())
+    val releasing_blockAddr = Output(UInt(bABits.W))
+    val releasing_asid = if(MMU_ENABLED) Some(Output(UInt(AsidBits.W))) else None
   })
   // head of entry, for comparison
   val blockAddr_Access = RegInit(VecInit(Seq.fill(NMshrEntry)(0.U(bABits.W))))
@@ -135,6 +139,8 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   val releasing_stall = RegInit(VecInit(Seq.fill(NMshrEntry)(false.B)))
 
   io.releasing_stall := releasing_stall.asUInt.orR
+  io.releasing_valid := io.missRspIn.valid
+  io.releasing_blockAddr := blockAddr_Access(io.missRspIn.bits.instrId)
   io.empty := !entry_valid.orR
   io.probestatus := MSHR_st1.io.deq.valid//probestatus
   /*Structure Diagram
@@ -164,7 +170,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   val entryMatchProbeid_reg = Wire(UInt(NMshrEntry.W))
   val probeMatchMissReq = Wire(Bool())
   val allfalse_subentryvalidtype = Wire(Vec(NMshrSubEntry,Bool()))
-  val entryMatchProbe_st1 = MSHR_st1.io.deq.bits.entryMatchProbe//RegEnable(entryMatchProbe, io.probe.valid)
+  val entryMatchProbe_st1_raw = MSHR_st1.io.deq.bits.entryMatchProbe // st0 probe 结果
+  // st1 可能因 stall 跨过 missRsp 释放窗口：需要用当前 entry_valid 过滤掉已释放 entry 的陈旧 one-hot
+  val entryMatchProbe_st1 = entryMatchProbe_st1_raw & entry_valid
 
   val subentrySelectedForReq = Mux(entryMatchProbe_st1===0.U,allfalse_subentryvalidtype, subentry_valid(OHToUInt(entryMatchProbe_st1)))
   val subentryStatus = Module(new getEntryStatusReq(NMshrSubEntry)) // Output: alm_full, full, next
@@ -186,6 +194,9 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   val mshrStatus_st1_w = Wire(UInt(3.W))
   val mshrStatus_st0 = Wire(UInt(3.W))
   io.mshrStatus_st0 := mshrStatus_st0
+  // missRspIn 优先：同拍有 missRspIn 时禁止 missReq 参与分配/探测，避免 ready 语义被 missReq.valid 阻塞
+  val missRspHasPriority = io.missRspIn.valid
+  val missReqValid = io.missReq.valid && !missRspHasPriority
   /*PRIMARY_AVAIL         000
   * PRIMARY_FULL          001
   * SECONDARY_AVAIL       010
@@ -199,7 +210,8 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   if(MMU_ENABLED){
     val ASID_Access = RegInit(VecInit(Seq.fill(NMshrEntry)(0.U(AsidBits.W))))
     val missRspASID_st0 = ASID_Access(entryMatchMissRsp)
-    probeMatchMissReq := (io.probe.bits.blockAddr === io.missReq.bits.blockAddr) && (io.probeAsid.get === io.missReqAsid.get) && io.probe.valid && io.missReq.valid
+    io.releasing_asid.get := ASID_Access(io.missRspIn.bits.instrId)
+    probeMatchMissReq := (io.probe.bits.blockAddr === io.missReq.bits.blockAddr) && (io.probeAsid.get === io.missReqAsid.get) && io.probe.valid && missReqValid
     entryMatchProbe := Mux(probeMatchMissReq,UIntToOH(entryStatus.io.next),
     Reverse(Cat(blockAddr_Access.map(_ === io.probe.bits.blockAddr))) & entry_valid & Reverse(Cat(ASID_Access.map(_ === io.probeAsid.get))))
         entryMatchProbeid_reg := OHToUInt(Reverse(Cat(blockAddr_Access.map(_ === io.missReq.bits.blockAddr))) & entry_valid & Reverse(Cat(ASID_Access.map(_ === io.missReqAsid.get))))
@@ -217,7 +229,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   } else {
     entryMatchProbe :=  Mux(probeMatchMissReq,UIntToOH(entryStatus.io.next),
       Reverse(Cat(blockAddr_Access.map(_ === io.probe.bits.blockAddr))) & entry_valid)
-    probeMatchMissReq := (io.probe.bits.blockAddr === io.missReq.bits.blockAddr) && io.probe.valid && io.missReq.valid
+    probeMatchMissReq := (io.probe.bits.blockAddr === io.missReq.bits.blockAddr) && io.probe.valid && missReqValid
     when(io.missReq.fire && MSHR_st1.io.deq.ready && mshrStatus_st1_w === 0.U) { //PRIMARY_AVAIL
       blockAddr_Access(entryStatus.io.next) := io.missReq.bits.blockAddr
       instrId_Access(entryStatus.io.next) := io.missReq.bits.instrId
@@ -228,7 +240,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
 
   assert(PopCount(entryMatchProbe) <= 1.U)
 //RegEnable(OHToUInt(entryMatchProbe),io.missReq.fire)
-  val secondaryMiss = MSHR_st1.io.deq.bits.entryMatchProbe.orR
+  val secondaryMiss = entryMatchProbe_st1.orR
   val secondaryMiss_st0 = entryMatchProbe.orR
   val primaryMiss_st0 = !secondaryMiss_st0
   val primaryMiss = !secondaryMiss
@@ -279,7 +291,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   }
 
   when(primaryMiss_st0) {
-    when(mainEntryFull || io.missReq.valid && mainEntryAlmFull) {
+    when(mainEntryFull || missReqValid && mainEntryAlmFull) {
       mshrStatus_st0 := 1.U //PRIMARY_FULL
       //}.elsewhen(mainEntryAlmFull) {
       //  mshrStatus_st1 := 5.U //PRIMARY_ALM_FULL
@@ -287,7 +299,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
       mshrStatus_st0 := 0.U //PRIMARY_AVAIL
     }
   }.otherwise {
-    when(subEntryFull || io.missReq.valid && subEntryAlmFull) {
+    when(subEntryFull || missReqValid && subEntryAlmFull) {
       mshrStatus_st0 := 3.U //SECONDARY_FULL
       //}.elsewhen(subEntryAlmFull) {
       //  mshrStatus_st1 := 7.U //SECONDARY_ALM_FULL
@@ -324,10 +336,10 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
       probestatus := false.B
     }
   }
-  io.full := MSHR_st1.io.deq.valid && MSHR_st1.io.deq.bits.full
+  io.full := entryStatus.io.full
   //  ******     mshr::allocate_vec_sub/allocate_vec_main     ******
   /*0:PRIMARY_AVAIL 1:PRIMARY_FULL 2:SECONDARY_AVAIL 3:SECONDARY_FULL*/
-  io.missReq.ready := !(mshrStatus_st1_w === 1.U || mshrStatus_st1_w === 3.U )
+  io.missReq.ready := !(mshrStatus_st1_w === 1.U || mshrStatus_st1_w === 3.U ) && !missRspHasPriority
   assert(!io.missReq.fire || (io.missReq.fire && !io.missRspIn.fire), "MSHR cant have Req & Rsp valid in same cycle, later the prior")
   val real_SRAMAddrUp = Mux(secondaryMiss, OHToUInt(entryMatchProbe_st1), entryStatus.io.next)
   val real_SRAMAddrDown = Mux(secondaryMiss,subEntryIdx_st1, 0.U)
@@ -342,7 +354,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     ASID_Access(entryStatus.io.next) := io.missReq.bits.ASID
   }*/
 
-  io.probeOut_st1.a_source := Mux(io.missReq.valid,real_SRAMAddrUp,entryMatchProbeid_reg)
+  io.probeOut_st1.a_source := Mux(missReqValid,real_SRAMAddrUp,entryMatchProbeid_reg)
 
   //  ******      mshr::vec_arrange_core_rsp    ******
   subentryStatusForRsp.io.valid_list := Reverse(Cat(subentry_valid(entryMatchMissRsp)))
@@ -353,8 +365,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   //io.missRspIn.ready := !(subentryStatusForRsp.io.used >= 2.U ||
   //  (subentryStatusForRsp.io.used === 1.U && !io.missRspOut.ready))
   io.missRspIn.ready := !((subentryStatusForRsp.io.used >= 2.U) ||
-    ((mshrStatus_st1_w === 4.U || mshrStatus_st1_w === 3.U) && subentryStatusForRsp.io.used === 1.U) ||
-    io.missReq.valid)
+    ((mshrStatus_st1_w === 4.U || mshrStatus_st1_w === 3.U) && subentryStatusForRsp.io.used === 1.U))
 
   entryMatchMissRsp := io.missRspIn.bits.instrId
   //entryMatchMissRsp := Reverse(Cat(instrId_Access.map(_ === io.missRspIn.bits.instrId))) & entry_valid
