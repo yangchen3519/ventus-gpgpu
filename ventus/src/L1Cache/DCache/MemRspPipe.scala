@@ -140,7 +140,9 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     // Issue TagAccess allocateWrite only when the response is actually accepted into MemRsp_pipeReg_st0_st1.
     // This prevents the next memRsp (already visible at memRsp_Q head after a previous fire) from overwriting
     // allocate context while the current response is still being processed (e.g. dirty replace FSM busy).
-    val memRspEnqFire = st0_valid && MemRsp_pipeReg_st0_st1.enq.ready
+    // val memRspEnqFire = st0_valid && MemRsp_pipeReg_st0_st1.enq.ready
+    // 发起allocateWrite的时机应该是 MemRsp_pipeReg_st0_st1 入队成功
+    val memRspEnqFire = MemRsp_pipeReg_st0_st1.enq.fire
     tAAllocateWriteReq_valid := memRspEnqFire && memRspisRead && !io.MSHRMissRspOutUCached // cached read response
 
 	    // MSHRData pipe reg: enq 条件和 MSHRMissRspIn 一样
