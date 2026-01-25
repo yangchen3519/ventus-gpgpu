@@ -296,7 +296,7 @@ for(i<- 0 until params.cache.sets){
   io.result.bits.size   :=Mux(flush_issue_regnext, log2Up(params.cache.beatBytes).asUInt, read_bits_reg.size)
   io.result.bits.set    :=Mux(flush_issue_regnext, RegNext(flush_set, false.B), read_bits_reg.set)
   io.result.bits.source :=Mux(flush_issue_regnext, RegNext(flush_source_reg, false.B), read_bits_reg.source)
-  io.result.bits.tag    :=Mux(flush_issue_regnext, RegNext(flush_tag, false.B), read_bits_reg.tag)
+  io.result.bits.tag    :=Mux(flush_issue_regnext, ways(RegNext(flush_way, false.B)).tag, read_bits_reg.tag)
   //victim tag should be transfered when miss dirty
   io.result.bits.opcode :=Mux(flush_issue_regnext, Hint, read_bits_reg.opcode)
 
