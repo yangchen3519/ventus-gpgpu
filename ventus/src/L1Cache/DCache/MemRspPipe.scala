@@ -80,7 +80,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     // st1
     val missRspTI_st1 = Wire(new VecMshrTargetInfo)
     val memRsp_st1_isRead = MemRsp_pipeReg_st0_st1.deq.bits.isRead
-    val memRsp_st1_isSpecial = MemRsp_pipeReg_st0_st1.deq.bits.isSpecial
+    val memRsp_st1_isSpecial = MemRsp_pipeReg_st0_st1.deq.bits.isSpecial && MemRsp_pipeReg_st0_st1.deq.valid
     val dAReq_valid = Wire(Bool())
     val st1_ready = Wire(Bool())
     val tAAllocateWriteReq_valid = WireInit(false.B)
@@ -164,7 +164,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     MSHRData_pipeReg.deq.ready := io.MSHRMissRspOut.ready
     // ---st1---
     // coreRsp
-    io.memRsp_coreRsp.valid := Mux(MemRsp_pipeReg_st0_st1.deq.bits.isSpecial,
+    io.memRsp_coreRsp.valid := Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.valid,
         io.MSHRMissRspOut.valid)
     io.memRsp_coreRsp.bits.Rsp.data := Mux(memRsp_st1_isSpecial,
