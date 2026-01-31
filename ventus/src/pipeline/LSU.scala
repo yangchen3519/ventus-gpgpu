@@ -68,7 +68,7 @@ class ShareMemCoreReq_np extends Bundle{
   val instrId = UInt(log2Up(lsu_nMshrEntry).W)
   val isWrite = Bool()//Vec(NLanes, Bool())
   //val tag = UInt(dcache_TagBits.W)
-  val setIdx = UInt(dcache_SetIdxBits.W)
+  val setIdx = UInt(10.W)
   val perLaneAddr = Vec(num_thread, new ShareMemPerLaneAddr_np)
   val data = Vec(num_thread, UInt(xLen.W))
 }
