@@ -68,7 +68,7 @@ class ShareMemCoreReq_np extends Bundle{
   val instrId = UInt(log2Up(lsu_nMshrEntry).W)
   val isWrite = Bool()//Vec(NLanes, Bool())
   //val tag = UInt(dcache_TagBits.W)
-  val setIdx = UInt(dcache_SetIdxBits.W)
+  val setIdx = UInt(log2Ceil(sharedmem_depth).W)
   val perLaneAddr = Vec(num_thread, new ShareMemPerLaneAddr_np)
   val data = Vec(num_thread, UInt(xLen.W))
 }
@@ -169,7 +169,10 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   addr_wire:=addr(PriorityEncoder(reg_save.mask.asUInt))
   val tag = Mux(reg_save.mask.asUInt=/=0.U, addr_wire(xLen-1, xLen-1-dcache_TagBits+1), 0.U(dcache_TagBits.W))
   val setIdx = Mux(reg_save.mask.asUInt=/=0.U, addr_wire(xLen-1-dcache_TagBits, xLen-1-dcache_TagBits-dcache_SetIdxBits+1), 0.U(dcache_SetIdxBits.W))
-
+  val setIdx_shared = Mux(reg_save.mask.asUInt=/=0.U, 
+                        addr_wire(log2Ceil(sharedmem_depth) + dcache_BlockOffsetBits + dcache_WordOffsetBits - 1, 
+                                  dcache_BlockOffsetBits + dcache_WordOffsetBits), 
+                        0.U)
   val same_tag = Wire(Vec(num_thread, Bool()))
     (0 until num_thread).foreach( x =>
       same_tag(x) := Mux(reg_save.mask(x), addr(x)(xLen-1, xLen-1-dcache_TagBits-dcache_SetIdxBits+1)===Cat(tag, setIdx), false.B)
@@ -213,7 +216,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   io.to_shared.bits.instrId := reg_entryID
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   //io.to_shared.bits.tag := tag
-  io.to_shared.bits.setIdx := setIdx
+  io.to_shared.bits.setIdx := setIdx_shared
   (0 until num_thread).foreach(x => {
     io.to_shared.bits.perLaneAddr(x).blockOffset := blockOffset(x)
     io.to_shared.bits.perLaneAddr(x).wordOffset1H := wordOffset1H(x)
