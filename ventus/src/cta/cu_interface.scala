@@ -243,8 +243,11 @@ class cu_interface extends Module {
     splitter_load_new -> fifo.io.deq.bits.vgpr_base,
     io.cu_wf_new(fifo.io.deq.bits.cu_id).fire -> (splitter_vgpr_addr + fifo.io.deq.bits.num_vgpr_per_wf),
   ))
+  val pds_bytes_per_wg = fifo.io.deq.bits.num_pds_per_wf * fifo.io.deq.bits.num_wf
+  val wg_slot_linear = fifo.io.deq.bits.cu_id * NUM_WG_SLOT.U + fifo.io.deq.bits.wg_slot_id
   splitter_pds_addr := MuxCase(splitter_pds_addr, Seq(
-    splitter_load_new -> fifo.io.deq.bits.pds_base,
+    // PDS pool is organized by resident WG slot: slot_linear = cu_id * NUM_WG_SLOT + wg_slot_id.
+    splitter_load_new -> (fifo.io.deq.bits.pds_base + wg_slot_linear * pds_bytes_per_wg),
     io.cu_wf_new(fifo.io.deq.bits.cu_id).fire -> (splitter_pds_addr + fifo.io.deq.bits.num_pds_per_wf),
   ))
   splitter_num_thread := MuxCase(splitter_num_thread, Seq(
