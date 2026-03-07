@@ -498,12 +498,12 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.WriteReq_dA := DataAccessWriteHitSRAMWReq
     //st1 valid: enqueue st1 st2 pipe reg for coreRsp
     // indicating coreRsp is valid from core Req
-    // case: regular read/write hit, uncached read hit, uncache write hit undirty, write miss, flush invalidate complete
+    // case: regular read/write hit, uncached read hit, uncache write hit undirty, flush invalidate complete
   st1_valid := false.B
   when(!Req_RTAB_st1_valid ){
     when(Control_st1.isRead && io.tA_Hit_st1.hit){
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
-    }.elsewhen(Control_st1.isWrite){     
+    }.elsewhen(Control_st1.isWrite && io.tA_Hit_st1.hit){
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     
   }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
@@ -520,7 +520,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //==========
   // st2 pipe reg
-  when(st1_valid && st1_ready && (CacheHit_st1 || WriteMiss_st1)){
+  // coreRsp 第 1 类：可由当前 core request 直接生成响应
+  // 情况：cache hit 的应答，数据会在 st2 从 data access 路径中选出
+  // write miss 不在这里返回，而是走 memReq_coreRsp 旁路，表示写请求已被下游接收
+  when(st1_valid && st1_ready && CacheHit_st1){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := DontCare
@@ -528,14 +531,21 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
+  // coreRsp 第 2 类：响应来自下层 memory 回包后的 memRsp 路径，而不是当前 core request 直接生成
+  // 典型场景：
+  // 1. cached read miss 从下层取回整条 cacheline 后，既要回填 dA，也要把对应 lane 的数据返回给 core
+  // 2. uncached read 从下层取回数据后直接返回给 core，不经过本地 cache hit 路径
+  // 3. special 请求（如 LR/SC/AMO）经 SMSHR/特殊返回路径整理后，再回到 coreRsp
+  // 这类响应的共同点是 validFromCoreReq = false，st2 取数时使用这里携带的 Rsp.data，而不是 dA_data。
   }.elsewhen(io.memRsp_coreRsp.valid){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := io.memRsp_coreRsp.bits.Rsp.data
-     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.instrId := io.memRsp_coreRsp.bits.Rsp.instrId
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.instrId := io.memRsp_coreRsp.bits.Rsp.instrId
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
+  // coreRsp 第 3 类：flush / invalidate 请求完成后返回给 core 的应答
   }.elsewhen(st1_valid && st1_ready && (FlushInvstateReg === responding)){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
@@ -549,8 +559,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits := DontCare
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
   }
+  // 由 core request 自身产生的响应，在同一个周期内会阻止 memRsp_coreRsp 占用 st2 的入队口。
   val coreRspPipeEnqFromCoreReq =
-    (st1_valid && st1_ready && (CacheHit_st1 || WriteMiss_st1)) ||
+    (st1_valid && st1_ready && CacheHit_st1) ||
       (st1_valid && st1_ready && (FlushInvstateReg === responding))
   io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.enq.ready && !coreRspPipeEnqFromCoreReq
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid
@@ -562,8 +573,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   coreRsp_st2_coreRsp_data_hold.io.enq.bits := io.dA_data
   coreRsp_st2_coreRsp_data_hold.io.deq.ready := coreReq_st2_ready
   val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data_hold.io.deq.valid,coreRsp_st2_coreRsp_data_hold.io.deq.bits,io.dA_data)
+  // st2 第 1 类：coreRsp 来自 core request 路径，数据来自 dA_data/DataAccessReadHit。
   val coreRspFromCoreReq_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
+  // st2 第 2 类：coreRsp 来自 memRsp 路径。
+  // 此时响应已经由 MemRspPipe 基于 MSHR/SMSHR 的 missRspOut 整理完成，
+  // 数据直接保存在 pipeReg_st1_st2.bits.Rsp.data 中，st2 不再从 dA_data 取数。
   val coreRspFromMemRsp_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && !CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
+  // st2 总的 valid 包含三种情况：coreReq 产生的 rsp、memRsp 产生的 rsp、以及直接旁路的 memReq_coreRsp。
   val st2_valid =  coreRspFromCoreReq_st2 || coreRspFromMemRsp_st2 || io.memReq_coreRsp.valid
   DataMemOrder_st2 := Mux(CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq, DataAccessReadHit, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.data)
   //data covertion

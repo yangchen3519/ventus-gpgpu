@@ -53,6 +53,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val memRspPipe = Module(new MemRspPipe)
   val memRsp_Q = Module(new Queue(new DCacheMemRsp,entries = 2,flow=false,pipe=false))
   val memReq_Q = Module(new Queue(new WshrMemReq,entries = 8,flow=false,pipe=false))
+  val memReqCoreRspActiveMask_Q = Module(new Queue(Vec(NLanes, Bool()),entries = 8,flow=false,pipe=false))
   val RTAB_pushedIdx_st2 = Module(new Queue(UInt(NRTABs.W),entries = 8,flow=false,pipe=false))
   val MemReqArb = Module(new Arbiter(new WshrMemReq, 2))
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
@@ -220,6 +221,10 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   MemReqArb.io.in(0).bits := dirtyReplaceMemReq
   replaceMemReqFire := MemReqArb.io.in(0).fire
   memReq_Q.io.enq <> MemReqArb.io.out
+  // 对通过 memReq_coreRsp 返回的请求（当前由 hasCoreRsp 标识，主要是写类请求），
+  // 这里并行保存对应的 lane activeMask。
+  memReqCoreRspActiveMask_Q.io.enq.valid := MemReqArb.io.out.fire && MemReqArb.io.out.bits.hasCoreRsp
+  memReqCoreRspActiveMask_Q.io.enq.bits := VecInit(coreReqPipe.io.perLaneAddr_st1.map(_.activeMask))
   // todo NOT right!!
   RTAB_pushedIdx_st2.io.enq.valid := MemReqArb.io.out.valid
   RTAB_pushedIdx_st2.io.enq.bits  := ReplayTable.io.RTABpushedIdx
@@ -336,6 +341,11 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     memReq_st3 := memReq_Q.io.deq.bits
   }
 
+  when(coreRsp_st2_valid_from_memReq){
+    assert(memReqCoreRspActiveMask_Q.io.deq.valid, "memReq_coreRsp activeMask queue underflow")
+  }
+  memReqCoreRspActiveMask_Q.io.deq.ready := coreReqPipe.io.memReq_coreRsp.fire
+
   val memReqSetIdx_st2 = memReq_Q.io.deq.bits.a_addr.get(WordLength - TagBits -1,WordLength - TagBits - SetIdxBits)
   when(memReqIsWrite_st3 && memReq_Q.io.deq.fire){
     memReq_st3.a_source := Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)
@@ -351,7 +361,9 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreRspFromMemReq.isWrite := true.B
   //st指令的regIdx对SM流水线提交级无意义，且memReq_Q没有传输该数据的通道
   coreRspFromMemReq.instrId := memReq_Q.io.deq.bits.coreRspInstrId
-  coreRspFromMemReq.activeMask := DontCare//coreRsp_st2.io.deq.bits.activeMask//VecInit(Seq.fill(NLanes)(true.B))
+  coreRspFromMemReq.activeMask := Mux(memReqCoreRspActiveMask_Q.io.deq.valid,
+    memReqCoreRspActiveMask_Q.io.deq.bits,
+    VecInit(Seq.fill(NLanes)(false.B)))
   // memReq(st3)
   io.memReq.get.bits := memReq_st3
   io.memReq.get.bits.a_addr.get := memReq_st3_addr.get
