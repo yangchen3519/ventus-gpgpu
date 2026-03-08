@@ -22,6 +22,13 @@ import mmu.SV32.{asidLen, paLen, vaLen}
 import top.parameters.DCACHE_DEBUG
 import scala.tools.nsc.interpreter.Repl
 
+class WshrMemReqV2 extends DCacheMemReq {
+  val hasCoreRsp = Bool()
+  val coreRspInstrId = UInt(32.W)
+  val activeMask = Vec(num_thread, Bool())
+  val Asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
+}
+
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
   val io = IO(new Bundle{
     val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
@@ -52,12 +59,11 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val coreReqPipe = Module(new CoreReqPipe)
   val memRspPipe = Module(new MemRspPipe)
   val memRsp_Q = Module(new Queue(new DCacheMemRsp,entries = 2,flow=false,pipe=false))
-  val memReq_Q = Module(new Queue(new WshrMemReq,entries = 8,flow=false,pipe=false))
-  val memReqCoreRspActiveMask_Q = Module(new Queue(Vec(NLanes, Bool()),entries = 8,flow=false,pipe=false))
+  val memReq_Q = Module(new Queue(new WshrMemReqV2,entries = 8,flow=false,pipe=false))
   val RTAB_pushedIdx_st2 = Module(new Queue(UInt(NRTABs.W),entries = 8,flow=false,pipe=false))
-  val MemReqArb = Module(new Arbiter(new WshrMemReq, 2))
+  val MemReqArb = Module(new Arbiter(new WshrMemReqV2, 2))
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
-  val dirtyReplaceMemReq = Wire(new WshrMemReq)
+  val dirtyReplaceMemReq = Wire(new WshrMemReqV2)
   val coreWriteHitFire = coreReqPipe.io.st1_valid && coreReqPipe.io.st1_ready && coreReqPipe.io.WriteHit_st1
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
@@ -215,16 +221,14 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   SMshrAccess.io.stage2_ready := MemReqArb.io.in(1).ready
 
   // memory request arbiter
-  // source: dirty replace / core Req ( miss, uncached dirty writeback, flush and invalidate)
+  // in(0): 来自 MemRspPipe 的 dirty replace 写回
+  // in(1): 来自 CoreReqPipe 的 miss / uncached evict / flush / invalidate
+  // 两路统一仲裁后进入 memReq_Q，再由 st3 作为单发射缓冲送到 io.memReq。
   MemReqArb.io.in(1) <> coreReqPipe.io.MissReq_Mem
   MemReqArb.io.in(0).valid := memRspPipe.io.memReq_valid
   MemReqArb.io.in(0).bits := dirtyReplaceMemReq
   replaceMemReqFire := MemReqArb.io.in(0).fire
   memReq_Q.io.enq <> MemReqArb.io.out
-  // 对通过 memReq_coreRsp 返回的请求（当前由 hasCoreRsp 标识，主要是写类请求），
-  // 这里并行保存对应的 lane activeMask。
-  memReqCoreRspActiveMask_Q.io.enq.valid := MemReqArb.io.out.fire && MemReqArb.io.out.bits.hasCoreRsp
-  memReqCoreRspActiveMask_Q.io.enq.bits := VecInit(coreReqPipe.io.perLaneAddr_st1.map(_.activeMask))
   // todo NOT right!!
   RTAB_pushedIdx_st2.io.enq.valid := MemReqArb.io.out.valid
   RTAB_pushedIdx_st2.io.enq.bits  := ReplayTable.io.RTABpushedIdx
@@ -242,9 +246,13 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   dirtyReplaceMemReq.a_data := replaceDataSel//wait for data SRAM in next cycle
   dirtyReplaceMemReq.hasCoreRsp := false.B
   dirtyReplaceMemReq.coreRspInstrId := DontCare
+  dirtyReplaceMemReq.activeMask := VecInit(Seq.fill(NLanes)(false.B))
   dirtyReplaceMemReq.spike_info.foreach{ _ := DontCare }
 
   // mem request
+  // memReq_Q 是内部请求队列，deq.bits 是“当前队头”的 live 视图；
+  // io.memReq.get 则是对外真正发射的 1-entry launch buffer。
+  // 因此 deq.valid 只表示“队头存在”，不代表“这条请求已经作为当前待发请求锁存到 st3”。
   val coreRsp_st2_valid_from_memReq = Wire(Bool())
   val waitTLB = if(MMU_ENABLED) Some(RegInit(0.U(2.W))) else None
   val waitTLBnext = if(MMU_ENABLED) Some(Wire(UInt(2.W))) else None
@@ -252,7 +260,17 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val memReq_st3_ready_tlb = if(MMU_ENABLED) Some(Wire(Bool())) else None
   val memReq_st3_valid_tlb = if(MMU_ENABLED) Some(Wire(Bool())) else None
 
+  // memReq_st3: 暂存这条待发 memReq 的主体字段（opcode / param / data / mask / spike_info）。
+  // memReq_st3_addr: 最终真正发到总线上的地址。
+  // 在开启 TLB 时，主体字段可先锁存，物理地址要等 TLB 返回后再写入该寄存器；
+  // 在不开 TLB 时，它与当前拍锁存到 memReq_st3.a_addr 的值保持一致，但仍单独保留以统一两种路径。
   val memReq_st3_addr = if(MMU_ENABLED) Some(Reg(UInt(paLen.W))) else Some(Reg(UInt(vaLen.W)))
+  // memReq_st3_source: 表示与 memReq_st3 / memReq_st3_addr 对应的“同一条 staged memReq”的 source。
+  // 在不开 TLB 时，如果继续把 source 放在 memReq_st3.a_source 中，并且同样只在 memReq_Q.io.deq.fire 时锁存，
+  // 功能上也可以等价；这里独立成寄存器，是为了明确它和 a_addr 一样属于 st3 已锁存请求，
+  // 避免从 memReq_Q.io.deq.bits 这个 live queue head 直接读取 source，造成地址 / source 串线。
+  // Keep TL source aligned with the separately staged request address.
+  val memReq_st3_source = Reg(UInt(io.memReq.get.bits.a_source.getWidth.W))
   val a_op_st3 = memReq_Q.io.deq.bits.a_opcode//memReq_Q.io.deq.bits.a_opcode
   val a_op_st3_isFlush = a_op_st3 === 5.U
   val memReqIsWrite_st3 = (a_op_st3 === TLAOp_PutFull) || ((a_op_st3 === TLAOp_PutPart) && memReq_Q.io.deq.bits.a_param === 0.U)
@@ -317,9 +335,11 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
         memReq_st3.a_addr.get := memReq_Q.io.deq.bits.a_addr.get
         memReq_st3.a_mask := memReq_Q.io.deq.bits.a_mask
         memReq_st3.a_opcode := memReq_Q.io.deq.bits.a_opcode
+        memReq_st3_source := memReq_Q.io.deq.bits.a_source
         memReq_st3.spike_info.foreach{ _ := memReq_Q.io.deq.bits.spike_info.getOrElse(0.U) }
       }
       when(memReq_st3_valid_tlb.get){
+        // 开 TLB 时，最终发出的地址来自这里的物理地址，而不是之前暂存的虚地址。
         memReq_st3_addr.get := io.TLBRsp.get.bits.paddr
       }
 
@@ -328,6 +348,15 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     case false => {
       memReq_Q.io.deq.ready := wshrPass && io.memReq.get.ready && !memRspPipe.io.memRsp_coreRsp.valid
       when(wshrPass && memReq_Q.io.deq.fire) {
+        // 不开 TLB 时，st3 主体字段、st3_addr、st3_source 都在 deq.fire 当拍锁存，
+        // 三者描述的是同一条请求，只是输出时仍显式使用独立的 addr/source 寄存器。
+        memReq_st3.a_data := memReq_Q.io.deq.bits.a_data
+        memReq_st3.a_param := memReq_Q.io.deq.bits.a_param
+        memReq_st3.a_addr.get := memReq_Q.io.deq.bits.a_addr.get
+        memReq_st3.a_mask := memReq_Q.io.deq.bits.a_mask
+        memReq_st3.a_opcode := memReq_Q.io.deq.bits.a_opcode
+        memReq_st3_source := memReq_Q.io.deq.bits.a_source
+        memReq_st3.spike_info.foreach{ _ := memReq_Q.io.deq.bits.spike_info.getOrElse(0.U) }
         memReq_st3_addr.get := memReq_Q.io.deq.bits.a_addr.get
       }
     }
@@ -337,21 +366,15 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // FSM for TLB handle and memreq transmit
   // 0-idle 1-wait TLB resp 2-issue memreq
 
-  when(wshrPass && memReq_Q.io.deq.fire) {
-    memReq_st3 := memReq_Q.io.deq.bits
-  }
-
-  when(coreRsp_st2_valid_from_memReq){
-    assert(memReqCoreRspActiveMask_Q.io.deq.valid, "memReq_coreRsp activeMask queue underflow")
-  }
-  memReqCoreRspActiveMask_Q.io.deq.ready := coreReqPipe.io.memReq_coreRsp.fire
-
   val memReqSetIdx_st2 = memReq_Q.io.deq.bits.a_addr.get(WordLength - TagBits -1,WordLength - TagBits - SetIdxBits)
   when(memReqIsWrite_st3 && memReq_Q.io.deq.fire){
-    memReq_st3.a_source := Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)
+    // write miss 的 TL source 要等真正 deq.fire、并拿到 WSHR pushedIdx 后才能最终确定。
+    memReq_st3_source := Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)
     //memReq_st3.a_source := Cat("d0".U, 0.U((log2Up(NMshrEntry)-log2Up(NWshrEntry)).W), WshrAccess.io.pushedIdx, coreReq_st1.setIdx)
-  }.elsewhen(memReqIsRead_st3 && memReq_Q.io.deq.valid){
-    memReq_st3.a_source := memReq_Q.io.deq.bits.a_source
+  }.elsewhen(memReqIsRead_st3 && memReq_Q.io.deq.fire){
+    // read miss / special miss 的 source 在入 memReq_Q 前就已确定；
+    // 这里在真正 deq.fire 时锁存，保证它和当前 staged 的 addr / data 对齐。
+    memReq_st3_source := memReq_Q.io.deq.bits.a_source
   }
 
   val coreRspFromMemReq = Wire(new DCacheCoreRsp)
@@ -361,13 +384,14 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreRspFromMemReq.isWrite := true.B
   //st指令的regIdx对SM流水线提交级无意义，且memReq_Q没有传输该数据的通道
   coreRspFromMemReq.instrId := memReq_Q.io.deq.bits.coreRspInstrId
-  coreRspFromMemReq.activeMask := Mux(memReqCoreRspActiveMask_Q.io.deq.valid,
-    memReqCoreRspActiveMask_Q.io.deq.bits,
-    VecInit(Seq.fill(NLanes)(false.B)))
+  coreRspFromMemReq.activeMask := memReq_Q.io.deq.bits.activeMask
   // memReq(st3)
   io.memReq.get.bits := memReq_st3
   io.memReq.get.bits.a_addr.get := memReq_st3_addr.get
+  io.memReq.get.bits.a_source := memReq_st3_source
 
+  // memReq_valid 表示 st3 launch buffer 当前是否持有一条尚未从 io.memReq 发走的请求。
+  // memReq_Q.io.deq.fire 和 io.memReq.get.fire 可能错拍，因此不能直接把 deq.valid 透传到 io.memReq.get.valid。
   val memReq_valid = RegInit(false.B)
   when(memReq_Q.io.deq.fire ^ io.memReq.get.fire){
     memReq_valid := memReq_Q.io.deq.fire

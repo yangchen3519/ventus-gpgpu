@@ -2,6 +2,24 @@
 
 > 本文件专注记录 `ventus/src/L1Cache/DCache` 相关的调试入口、最小波形观测点与新增问题定位结果，避免每次全仓库搜索。
 
+## 后续窗口快速接手流程（优先看）
+
+- 先读完本文件前 4 个部分：本节、`编译与测试流程`、`重要约束`、`代码入口`，再开始跑 case；不要先凭记忆改 RTL。
+- 先确认约束：`ventus/src/L1Cache/DCache/DCache.scala` 不是这轮 DCachev2 RTL debug 的修改落点，优先只看 `DCachev2.scala`、`CoreReqPipe.scala`、`MemRspPipe.scala`、`L1MSHR.scala`、`L1RTAB.scala`。
+- 调试 `nn64K` 这类卡死问题时，优先先跑“当前坏版本”和“上一个不会在同一点卡死的版本”做对照，不要只盯坏版本单边分析。
+- 先从 `gvm.log` 找 3 个锚点：最后一次 retire 前进点、最后一个关键地址、第一次出现 heartbeat-only 的周期；先把“停在哪里”说清楚，再开波形。
+- 如果表面现象是 LSU / `Coalscer.currentMask` / `activeMask` 清不掉，不要先假设 bug 在 LSU。DCache coreRsp 本身不带地址，任何更前面的 request identity 错配，最后都可能表现成 LSU 等不到 completion。
+- 顺着下面这条链只看最小信号即可，通常足够定位：
+  - `CoreReqPipe`：`missMemReq_st1.(a_addr,a_source,activeMask,hasCoreRsp,coreRspInstrId)`
+  - `DCachev2`：`MemReqArb -> memReq_Q.enq/deq -> io.memReq.(a_addr,a_source)`
+  - `MSHR/WSHR`：按 `a_source` 分配/释放 entry
+  - `MemRspPipe/CoreReqPipe`：`memRsp_coreRsp` 或 `memReq_coreRsp`
+  - `LSU.Coalscer`：`from_dcache.activeMask` 和 `currentMask`
+- 对 write miss，先核对 `memReq_coreRsp.activeMask` 是否真跟着请求一路带回；对 read miss，先核对 split miss 的 `a_addr` 和 `a_source` 是否一一对应。这两类问题外表都像 activeMask 死锁，但根因路径不同。
+- 发现怀疑点后，优先做“最小波形对照”而不是大改：例如只比同一对地址在旧/新波形里的 `a_source`，或只比同一条 write miss completion 的 `activeMask`。
+- 每次定向复测都在 case 目录下新开隔离子目录，保留 `run_console.log`、`gvm.log`、`waveform.fst`，避免覆盖上一轮证据。
+- 修完后先验证“是否越过旧停点”，再看是否还有新错误；不要把“旧死锁已解”和“程序已完全正确”混为一谈。
+
 ## 编译与测试流程（基础指令版，参考 `skills/ventus-cache-debug/SKILL.md`）
 
 - 所有 build / case run / 日志过滤 / regression 命令都必须在**同一个 shell** 先执行：
@@ -66,6 +84,7 @@ python3 regression-test.py
 
 - 禁止在未征得用户明确同意的情况下执行任何会丢失本地改动的操作，包括但不限于：`git reset --hard`、`git reset HEAD`、`git checkout -- <file>`、`git restore --source=HEAD ...`、`git clean -fd` 等。
 - 如需回退或切换方案，优先使用：最小范围的 `git diff`/手工补丁、`git stash push -u`（并说明恢复方式）、或在用户确认后再做 destructive 操作。
+- `ventus/src/L1Cache/DCache/DCache.scala` 不加入当前 RTL 调试目标的数据通路，不允许作为本轮 DCachev2 debug 的修改落点；若 v2 需要新增类型或逻辑，优先放到独立文件，或落在 `DCachev2.scala` / `CoreReqPipe.scala` / `MemRspPipe.scala` 等实际编译路径中。
 
 ## 记录要求（强制）
 
@@ -76,6 +95,7 @@ python3 regression-test.py
 ## 代码入口（v2）
 
 - 顶层：`ventus/src/L1Cache/DCache/DCachev2.scala`
+- v2 专用类型：定义在 `ventus/src/L1Cache/DCache/DCachev2.scala` 文件头
 - CoreReq 流水：`ventus/src/L1Cache/DCache/CoreReqPipe.scala`
 - MemRsp/replace：`ventus/src/L1Cache/DCache/MemRspPipe.scala`
 - MSHR/RTAB/WSHR：`ventus/src/L1Cache/L1MSHR.scala`、`ventus/src/L1Cache/DCache/L1RTAB.scala`、`ventus/src/L1Cache/DCache/DCacheWSHR.scala`
@@ -232,6 +252,53 @@ python3 regression-test.py
 ### 验证
 
 - `./mill -i ventus[6.4.0].runMain top.GPGPU_gen`：通过。
+
+## 2026-03-07 最小验证：把 write-miss `activeMask` 并入 `memReq_Q` 仍不能解除 `nn64K` 卡死
+
+### 修改点
+
+- `ventus/src/L1Cache/DCache/DCachev2.scala`：新增 `WshrMemReqV2`，把 write-miss 需要的 `activeMask` 与 `hasCoreRsp/coreRspInstrId` 一起放到 v2 专用 memReq bundle，避免触碰 `DCache.scala`。
+- `ventus/src/L1Cache/DCache/CoreReqPipe.scala`：write miss 在生成 `missMemReq_st1` 时把 `Req.perLaneAddr.activeMask` 一起锁存到 `WshrMemReqV2.activeMask`；非 coreRsp 请求（flush/evict）统一写 0 mask。
+- `ventus/src/L1Cache/DCache/DCachev2.scala`：删除独立的 `memReqCoreRspActiveMask_Q`，`memReq_coreRsp.activeMask` 改为直接读取 `memReq_Q.io.deq.bits.activeMask`。
+
+### 验证命令
+
+```bash
+source /home/sunhn/ventus-env/env.sh
+cd /home/sunhn/ventus-env/gpgpu
+bash build-ventus.sh --build gvm
+
+cd /home/sunhn/ventus-env/rodinia/opencl/nn/verify_min_fix_memreq_mask
+VENTUS_BACKEND=gvm VENTUS_WAVEFORM=1 \
+./nn.out /home/sunhn/ventus-env/rodinia/data/nn/list64k.txt \
+  -r 20 -lat 30 -lng 90 -f /home/sunhn/ventus-env/rodinia/data/nn \
+  -t -p 0 -d 0 \
+  --ref /home/sunhn/ventus-env/rodinia/opencl/nn/nvidia-result-64k-lat30-lng90 \
+  2>&1 | tee run_console.log
+python3 /home/sunhn/ventus-env/gpgpu/sim-verilator/gvm-log-script.py \
+  --input run_console.log \
+  --output gvm.log
+```
+
+### 结果
+
+- 新日志目录：`/home/sunhn/ventus-env/rodinia/opencl/nn/verify_min_fix_memreq_mask`
+- 关键现象与当前坏版本一致：
+  - 仍在 `@975` 出现首个 `x29` mismatch（老问题未变）。
+  - `sm0 warp7` 仍在 `0x800000d0` 发出 `lsu.w ... @ 90221180`。
+  - 紧接着仍在 `@12900` 报 `PMEM page at 0x90221180 not allocated, read as all zero`。
+  - 之后只剩 heartbeat：`@20000/@30000/@40000/@50000/@60000/...`，没有再看到新的 retire 前进。
+- 对比 `05503f8`：
+  - 旧版同样命中 `0x90221180`，但不会在这里卡死，而是继续执行到 `@84775`，最终死于 `UNDEFINED INSTRUCTION @ PC 0x00010000`。
+
+### 结论
+
+- 仅把 write-miss `activeMask` 从旁路 sideband 改为随 `memReq_Q` 携带，不足以修复当前 `nn64K` 的卡死。
+- 这说明先前“activeMask 脱节导致 store-miss completion 丢失”最多只是部分现象，真正让当前版本停在 `0x90221180` 的原因仍在别处。
+- 下一步应优先继续核对 write-miss completion 的其它状态是否也在重构中脱节，尤其是：
+  - `hasCoreRsp/coreRspInstrId` 与实际入队 request 的时序一致性；
+  - `WshrAccess.io.pushReq.valid`、`coreRsp_st2_valid_from_memReq`、`coreReqPipe.io.memReq_coreRsp.fire` 在 `0x90221180` 附近是否真正发生；
+  - `st1_ready` / `memReq_Q.io.deq.ready` / `cRspBlockedOrWshrFull` 是否把 write miss completion 永久压住。
 
 ## 新问题：st1 stall 结束后 probeStatus 仍 SecondaryAvail（st1 保存的 entryMatchProbe 陈旧）
 
@@ -505,3 +572,64 @@ python3 regression-test.py
 ### 验证
 
 - `./mill -i ventus[6.4.0].runMain top.GPGPU_gen`：通过。
+
+## 2026-03-08 修复：split read miss 的 `a_source` 在 `DCachev2` 输出级串线，表现为 activeMask 相关卡死
+
+### 现象
+
+- 在已修复 `CoreReqPipe` st3 `activeMask` mux 之后，`nn64K` 仍会在 `@45055` 左右停住，只剩 heartbeat。
+- 停机前关键访问是 `sm1 warp7` 的跨两个 cache line 的 vector load：
+  - `0x90000f00`
+  - `0x90000f80`
+- 旧坏波形（`/tmp/verify_fix_st3_activeMask_mux.vcd`）显示这两个 split miss 离开 `sm1.dcache.io_memReq` 时 source 已被串掉：
+  - `#42205 addr=0x90000f00 src=191`
+  - `#42215 addr=0x90000f80 src=191`
+- 这会让两条 miss 在下游共享同一个返回身份，LSU 侧看起来就像“只回来半边 completion / activeMask 清到一半后卡住”。
+
+### 根因
+
+- `ventus/src/L1Cache/DCache/DCachev2.scala` 的 memReq 输出级把 `a_addr` 与 `a_source` 分开 staging：
+  - `a_addr` 走 `memReq_st3_addr`
+  - `a_source` 原先仍复用 `memReq_st3.a_source`
+- 在背靠背 split read miss 场景下，`memReq_st3.a_source` 会被后一条请求覆盖，而 `a_addr` 仍对应前一条请求，导致顶层 `io.memReq` 发出“地址/来源不匹配”的 request。
+- 结果是某个 half-line completion 回不到正确的 MSHR/LSU entry，最终表现为 activeMask 相关死锁。
+
+### 修改点
+
+- `ventus/src/L1Cache/DCache/DCachev2.scala`
+  - 新增独立的 `memReq_st3_source` 寄存器，和 `memReq_st3_addr` 一样按实际 `memReq_Q.io.deq.fire` 的请求锁存。
+  - 顶层输出改为 `io.memReq.get.bits.a_source := memReq_st3_source`，不再依赖 `memReq_st3.a_source` 的隐式复用。
+  - write miss 仍在真正 `deq.fire` 时用 `Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)` 生成 source；read miss 则锁存 dequeued request 自身的 source。
+
+### 验证
+
+- 编译安装：
+  - 默认 `bash build-ventus.sh --build gvm` 这轮遇到 Verilator internal fault；
+  - 改用低并行度重试并成功安装：
+
+```bash
+source /home/sunhn/ventus-env/env.sh
+cd /home/sunhn/ventus-env/gpgpu/sim-verilator
+make -f gvm.mk -j16 RELEASE=1 GVM_TRACE=1 VLIB_NPROC_CPU=16 VLIB_NPROC_DUT=1
+make -f gvm.mk install RELEASE=1 PREFIX=/home/sunhn/ventus-env/install VLIB_NPROC_CPU=16 VLIB_NPROC_DUT=1
+```
+
+- 定向 case：
+  - 目录：`/home/sunhn/ventus-env/rodinia/opencl/nn/verify_fix_memreq_source_align`
+  - 日志：`gvm.log`
+  - 波形：`waveform.fst`
+- 新波形中，同一组 split miss 已带不同 source 发出：
+  - `#42005 addr=0x90000f00 src=158`
+  - `#42015 addr=0x90000f80 src=191`
+- 新日志中程序已明显越过旧停点：
+  - 仍会在 `@19340` 看到 `PMEM page at 0x90221180 not allocated`，但不再死锁；
+  - 继续前进到 `@248015`、`@380000`，并在手动停止前跑到 `@413385` 仍有 retire。
+
+### 结论
+
+- 这次 `activeMask` 相关卡死的真正根因不是 lane mask 本身再次丢失，而是 split miss 的 `a_source` 被串线，导致 half-completion 回错身份。
+- 修复 `DCachev2` 输出级 `a_source` 锁存后，`nn64K` 已不再复现原先 `@45055` 的 activeMask 卡死。
+
+### 残留问题
+
+- 当前 `nn64K` 仍有与此问题独立的执行错误（例如大量 `x2/x8` mismatch），但它们不再表现为本次 activeMask/half-completion 死锁。

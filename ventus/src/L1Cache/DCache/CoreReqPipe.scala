@@ -84,7 +84,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val st1_valid           = Output(Bool())
     val st1_ready           = Output(Bool())
     // missReq_Mem for read write miss and flu inv dirty write back
-    val MissReq_Mem         = DecoupledIO(new WshrMemReq)
+    val MissReq_Mem         = DecoupledIO(new WshrMemReqV2)
     val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
     val WriteReq_dA_valid   = Output(Vec(BlockWords,Bool()))
     val WriteHit_st1        = Output(Bool())
@@ -115,9 +115,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val st1_valid = Wire(Bool())
   val st1_ready = Wire(Bool())
   // missReq st1
-  val missMemReq_st1   = Wire(new WshrMemReq)
-  val evictMemReq_st1  = Wire(new WshrMemReq)
-  val FluInvMemReq_st1 = Wire(new WshrMemReq)
+  val missMemReq_st1   = Wire(new WshrMemReqV2)
+  val evictMemReq_st1  = Wire(new WshrMemReqV2)
+  val FluInvMemReq_st1 = Wire(new WshrMemReqV2)
   val missMemReq_valid    = Wire(Bool())
   val evictMemReq_valid   = Wire(Bool())
   val FluInvMemReq_valid  = Wire(Bool())
@@ -269,6 +269,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val evictidle :: evictrsp:: Nil = Enum(2)
   val evictstateReg = RegInit(evictidle)
   val evictReg_next = WireInit(evictstateReg)
+// 对外 memReq 一共有三类来源，优先级从高到低：
+// 1. FluInvMemReq_st1: flush / invalidate 触发的 PutFull 或 Flush
+// 2. evictMemReq_st1: uncached 请求命中 dirty line 时，先把 victim line 写回
+// 3. missMemReq_st1: 普通 cached miss / uncached clean request / special request
+// 这里先在 st1 侧统一整理成 WshrMemReqV2，再由 DCachev2 的 memReq_Q + st3 发射到外部总线。
 // mem request io connection
   when(FluInvMemReq_valid){
     io.MissReq_Mem.bits := FluInvMemReq_st1
@@ -336,6 +341,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   OpcodeGen.io.hit_dirty := io.tA_Hit_st1.hit && io.tA_Hit_st1.isDirty
   addrGen.io.dataIn := CoreReq_pipeReg_st0_st1.deq.bits.Req.data
   addrGen.io.perLaneAddrIn := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
+  // missMemReq_st1: 来自当前 coreReq 的 miss 请求。
+  // 对 read / LR / SC / AMO，a_source 在这里就能确定，因为对应的 MSHR / SMSHR entry 已知；
+  // 对 cached write miss，最终 a_source 需要等 DCachev2 在真正发 memReq 时拿到 WSHR pushedIdx 后再生成。
+  // 因此 write miss 在这里先把主体字段整理好，a_source 仅作为占位。
   // cache miss mem Req
   missMemReq_st1.a_opcode := OpcodeGen.io.memReq_a_opcode
   missMemReq_st1.a_addr.get := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
@@ -343,6 +352,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   missMemReq_st1.a_data := addrGen.io.dataOut
   missMemReq_st1.hasCoreRsp := Control_st1.isWrite
   missMemReq_st1.coreRspInstrId := CoreReq_pipeReg_st0_st1.deq.bits.Req.instrId
+  missMemReq_st1.activeMask := VecInit(CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask))
   missMemReq_st1.spike_info.foreach( left =>
     left := CoreReq_pipeReg_st0_st1.deq.bits.Req.spike_info.getOrElse(0.U)
   )
@@ -360,6 +370,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }
   //regular read miss req mask is all 1
   missMemReq_st1.a_mask := Mux(missMemReq_st1.a_opcode === TLAOp_Get &&missMemReq_st1.a_param === 0.U,VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U))),addrGen.io.MaskOut)
+  // FluInvMemReq_st1: flush / invalidate 产生的对外请求。
+  // dirty line 需要 PutFull 把 victim line 写回；否则发 Flush / Invalidate hint 到下层。
+  // 这类请求不需要给 core 立即返回普通 load/store coreRsp。
   // flu or inv mem req
   FluInvMemReq_st1.a_opcode := Mux(FluInvIsPut_st1,TLAOp_PutFull,TLAOp_Flush)
   FluInvMemReq_st1.a_param := Mux(FluInvIsPut_st1, 0.U, Mux(CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush, TLAParam_Flush, TLAParam_Inv))
@@ -369,9 +382,12 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   FluInvMemReq_st1.a_source := DontCare
   FluInvMemReq_st1.hasCoreRsp := false.B
   FluInvMemReq_st1.coreRspInstrId := DontCare
+  FluInvMemReq_st1.activeMask := VecInit(Seq.fill(NLanes)(false.B))
   FluInvMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
   FluInvMemReq_valid := (FluInvIsPut_st1 || FluInvIsFluL2_st1) && CoreReq_pipeReg_st0_st1.deq.valid
   FluInvMemReq_st1.spike_info.foreach(_ := DontCare )
+  // evictMemReq_st1: uncached 请求如果命中 dirty cacheline，需要先把当前 cacheline 写回，
+  // 再通过 RTAB / replay 机制重放原始 uncached 请求。
   // uncache hit dirty cacheline evict request
   evictMemReq_st1.a_opcode := TLAOp_PutFull
   evictMemReq_st1.a_param  := 0.U
@@ -383,6 +399,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   evictMemReq_st1.spike_info.foreach(_ := DontCare )
   evictstateReg := evictReg_next
   evictMemReq_st1.coreRspInstrId := DontCare
+  evictMemReq_st1.activeMask := VecInit(Seq.fill(NLanes)(false.B))
   evictReg_next := evictstateReg
   // FSM for read da
   when(evictstateReg === evictidle){
@@ -592,7 +609,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreRsp_st3.io.enq.bits.data    := DataCoreOrder_st2
   CoreRsp_st3.io.enq.bits.instrId := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.instrId, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.instrId)
   CoreRsp_st3.io.enq.bits.isWrite := Mux(io.memReq_coreRsp.valid, io.memReq_coreRsp.bits.isWrite, CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.isWrite)
-  CoreRsp_st3.io.enq.bits.activeMask :=  CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask
+  CoreRsp_st3.io.enq.bits.activeMask := Mux(
+    io.memReq_coreRsp.valid,
+    io.memReq_coreRsp.bits.activeMask,
+    CoreRsp_pipeReg_st1_st2.deq.bits.Rsp.activeMask
+  )
   //
   io.CoreRsp <> CoreRsp_st3.io.deq
   io.st2_ready := CoreRsp_st3.io.enq.ready
