@@ -26,6 +26,8 @@ class CoreRspPipe_st2(implicit p: Parameters) extends DCacheBundle{
   val Rsp = new DCacheCoreRsp_d
   val perLaneAddr = Vec(NLanes, new DCachePerLaneAddr)
   val validFromCoreReq = Bool()
+  val readHitSnapshotValid = Bool()
+  val readHitSnapshotData = Vec(BlockWords, UInt(WordLength.W))
 }
 class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val io = IO(new Bundle{
@@ -513,9 +515,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
   }
   io.WriteReq_dA := DataAccessWriteHitSRAMWReq
-    //st1 valid: enqueue st1 st2 pipe reg for coreRsp
-    // indicating coreRsp is valid from core Req
-    // case: regular read/write hit, uncached read hit, uncache write hit undirty, flush invalidate complete
+  //st1 valid: enqueue st1 st2 pipe reg for coreRsp
+  // indicating coreRsp is valid from core Req
+  // case: regular read/write hit, uncached read hit, uncache write hit undirty, flush invalidate complete
   st1_valid := false.B
   when(!Req_RTAB_st1_valid ){
     when(Control_st1.isRead && io.tA_Hit_st1.hit){
@@ -537,6 +539,31 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
   //==========
   // st2 pipe reg
+  // 对 read-hit 来说，dA_data 对应“上一拍发出的 data SRAM 读请求”。
+  // 如果 st1 被 memRsp_coreRsp 等 backpressure 卡住，当前 hit 请求虽然还停在 st1，
+  // 但后续周期 DataAccess 可能已经被 refill 改写；因此需要把“stall 期间第一次可见的旧数据”
+  // 和这条 coreReq 一起带到 st2，而不是等到 st2 再去读 live 的 io.dA_data。
+  
+  val st1ReadHitSnapshot = Reg(Vec(dcache_BlockWords, UInt(WordLength.W)))
+  val st1ReadHitSnapshotValid = RegInit(false.B)
+  val st1ReadHitSnapshotPending = RegInit(false.B)
+  val readHitStall_st1 = CoreReq_pipeReg_st0_st1.deq.valid && ReadHit_st1 && !st1_ready
+  val readHitFire_st1 = CoreReq_pipeReg_st0_st1.deq.fire && ReadHit_st1
+  when(readHitStall_st1 && !st1ReadHitSnapshotValid && !st1ReadHitSnapshotPending){
+    st1ReadHitSnapshotPending := true.B
+  }
+  when(st1ReadHitSnapshotPending && !readHitFire_st1){
+    st1ReadHitSnapshot := io.dA_data
+    st1ReadHitSnapshotValid := true.B
+    st1ReadHitSnapshotPending := false.B
+  }
+  when(readHitFire_st1 || !CoreReq_pipeReg_st0_st1.deq.valid){
+    st1ReadHitSnapshotValid := false.B
+    st1ReadHitSnapshotPending := false.B
+  }
+  val st1ReadHitSnapshotAvail = st1ReadHitSnapshotValid || st1ReadHitSnapshotPending
+  val st1ReadHitSnapshotData = Mux(st1ReadHitSnapshotPending, io.dA_data, st1ReadHitSnapshot)
+
   // coreRsp 第 1 类：可由当前 core request 直接生成响应
   // 情况：cache hit 的应答，数据会在 st2 从 data access 路径中选出
   // write miss 不在这里返回，而是走 memReq_coreRsp 旁路，表示写请求已被下游接收
@@ -548,6 +575,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotValid := ReadHit_st1 && st1ReadHitSnapshotAvail
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotData := st1ReadHitSnapshotData
   // coreRsp 第 2 类：响应来自下层 memory 回包后的 memRsp 路径，而不是当前 core request 直接生成
   // 典型场景：
   // 1. cached read miss 从下层取回整条 cacheline 后，既要回填 dA，也要把对应 lane 的数据返回给 core
@@ -562,6 +591,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := io.memRsp_coreRsp.bits.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := io.memRsp_coreRsp.bits.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotValid := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotData := DontCare
   // coreRsp 第 3 类：flush / invalidate 请求完成后返回给 core 的应答
   }.elsewhen(st1_valid && st1_ready && (FlushInvstateReg === responding)){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
@@ -571,6 +602,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
     CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotValid := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotData := DontCare
   }.otherwise{
     CoreRsp_pipeReg_st1_st2.enq.valid := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits := DontCare
@@ -584,12 +617,17 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid
   CoreRsp_pipeReg_st1_st2.deq.ready := coreReq_st2_ready
   //== st2 ==
+  val dADataForCoreReq_st2 = Mux(
+    CoreRsp_pipeReg_st1_st2.deq.bits.readHitSnapshotValid,
+    CoreRsp_pipeReg_st1_st2.deq.bits.readHitSnapshotData,
+    io.dA_data
+  )
   //hold dataaccess data when there is conflict
   val coreRsp_st2_coreRsp_data_hold = Module(new Queue(Vec(dcache_BlockWords, UInt(WordLength.W)),1,true,false))
   coreRsp_st2_coreRsp_data_hold.io.enq.valid := CoreRsp_pipeReg_st1_st2.deq.valid && !coreReq_st2_ready && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq
-  coreRsp_st2_coreRsp_data_hold.io.enq.bits := io.dA_data
+  coreRsp_st2_coreRsp_data_hold.io.enq.bits := dADataForCoreReq_st2
   coreRsp_st2_coreRsp_data_hold.io.deq.ready := coreReq_st2_ready
-  val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data_hold.io.deq.valid,coreRsp_st2_coreRsp_data_hold.io.deq.bits,io.dA_data)
+  val DataAccessReadHit = Mux(coreRsp_st2_coreRsp_data_hold.io.deq.valid,coreRsp_st2_coreRsp_data_hold.io.deq.bits,dADataForCoreReq_st2)
   // st2 第 1 类：coreRsp 来自 core request 路径，数据来自 dA_data/DataAccessReadHit。
   val coreRspFromCoreReq_st2 = CoreRsp_pipeReg_st1_st2.deq.valid && CoreRsp_pipeReg_st1_st2.deq.bits.validFromCoreReq && !io.memReq_coreRsp.valid
   // st2 第 2 类：coreRsp 来自 memRsp 路径。

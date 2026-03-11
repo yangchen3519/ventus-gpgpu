@@ -64,12 +64,15 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     })
     // st0
     val MemRsp_pipeReg_st0_st1 = Module(new Queue(new memRspPipe_st1,entries = 1,flow=false,pipe=true)).io
-    val MSHRData_pipeReg = Module(new Queue(new DCacheMemRsp, entries = 1, flow = false, pipe = true)).io
 
     val st0_ready = Wire(Bool())
     val st0_valid = Wire(Bool())
     val RTABUpdateReq_valid = Wire(Bool())
     val idx_st0 = get_ID(io.memRsp.bits.d_source)
+    val missRspEntryIdx_st1 = Wire(UInt(log2Up(NMshrEntry).W))
+    // regular read 的整条回包数据按 instrId 暂存。
+    // 这样在 MSHRMissRspOut 给出 targetInfo 时，coreRsp 可以取到与当前 miss 身份绑定的 line data。
+    val missRspDataByInstrId = Reg(Vec(NMshrEntry, Vec(BlockWords, UInt(WordLength.W))))
     val memRspisRead = io.memRsp.bits.d_opcode === 1.U && io.memRsp.bits.d_param === 0.U
     val memRspisWrite = io.memRsp.bits.d_opcode === 0.U
     val memRspisFlushOrInv = io.memRsp.bits.d_opcode === 2.U
@@ -100,8 +103,8 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     io.RTABUpdateReq.bits.updateType := 0.U
     io.RTABUpdateReq.valid := RTABUpdateReq_valid
     io.WSHRPopReq.bits := idx_st0
-    // Write responses are always accepted in st0 (st0_ready := true), so pop can be driven by valid only.
-    // Using memRsp.fire here introduces structural ready->valid paths that can form combinational cycles.
+    // write response 在 st0 一定可接收，因此 WSHR pop 只需要跟随 valid。
+    // 如果这里改成 memRsp.fire，会把 ready 反向带进 valid，形成 ready->valid 组合回环。
     io.WSHRPopReq.valid := io.memRsp.valid && memRspisWrite
 
     when(memRspisLRSC || memRspisAMO){
@@ -114,11 +117,11 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
         st0_ready := true.B      
     }.elsewhen(memRspisWrite){
         st0_ready := true.B
-	    }.elsewhen(memRspisSpecial){
-	        st0_ready := io.SMSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
-	    }.elsewhen(memRspisRead){
-	        st0_ready := io.MSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
-	    }
+    }.elsewhen(memRspisSpecial){
+        st0_ready := io.SMSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
+    }.elsewhen(memRspisRead){
+        st0_ready := io.MSHRMissRsp.ready && MemRsp_pipeReg_st0_st1.enq.ready
+    }
     RTABUpdateReq_valid := io.memRsp.valid && st0_ready
     st0_valid := false.B
     when(io.memRsp.valid){
@@ -132,22 +135,22 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
            st0_valid := io.memRsp.valid
        }
     }
-    MemRsp_pipeReg_st0_st1.enq.valid := st0_valid && io.MSHRMissRsp.ready
+    val memRspMetaReady_st0 = Mux(memRspisSpecial, io.SMSHRMissRsp.ready, io.MSHRMissRsp.ready)
+    MemRsp_pipeReg_st0_st1.enq.valid := st0_valid && memRspMetaReady_st0
     MemRsp_pipeReg_st0_st1.enq.bits.Rsp := io.memRsp.bits
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
     MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisLRSC || memRspisAMO
     MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
-    // Issue TagAccess allocateWrite only when the response is actually accepted into MemRsp_pipeReg_st0_st1.
-    // This prevents the next memRsp (already visible at memRsp_Q head after a previous fire) from overwriting
-    // allocate context while the current response is still being processed (e.g. dirty replace FSM busy).
     // val memRspEnqFire = st0_valid && MemRsp_pipeReg_st0_st1.enq.ready
-    // 发起allocateWrite的时机应该是 MemRsp_pipeReg_st0_st1 入队成功
+    // allocateWrite 只能在 memRsp 真正进入 st1 pipeReg 后发起。
+    // 否则当前一笔 memRsp 还在处理时，队头上已经露出来的下一笔 memRsp 会提前覆盖 allocate 上下文。
     val memRspEnqFire = MemRsp_pipeReg_st0_st1.enq.fire
     tAAllocateWriteReq_valid := memRspEnqFire && memRspisRead && !io.MSHRMissRspOutUCached // cached read response
-
-	    // MSHRData pipe reg: enq 条件和 MSHRMissRspIn 一样
-	    MSHRData_pipeReg.enq.valid := io.MSHRMissRsp.valid
-	    MSHRData_pipeReg.enq.bits := io.memRsp.bits
+    // regular read 的 line data 可能要先于 st1 pipeReg 被 MSHR missRspOut 消费，
+    // 因此只要 memRsp 到了队头，就先把整条 line 记下来，避免后面 metadata/data 错位。
+    when(io.memRsp.valid && memRspisRead && !memRspisSpecial){
+        missRspDataByInstrId(idx_st0) := io.memRsp.bits.d_data
+    }
 
     missRspTI_st1 := Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.bits.targetInfo.asTypeOf(new VecMshrTargetInfo),
@@ -158,23 +161,26 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
             io.SMSHRMissRspOutAsid.get,
             io.MSHRMissRspOutAsid.get)
     }
-    io.MSHRMissRspOut.ready := io.memRsp_coreRsp.ready
-    io.SMSHRMissRspOut.ready := io.memRsp_coreRsp.ready
-    // MSHRData pipe reg: deq 条件和 MSHRMissRspOut 一样
-    MSHRData_pipeReg.deq.ready := io.MSHRMissRspOut.ready
     // ---st1---
-    // coreRsp
-    io.memRsp_coreRsp.valid := Mux(memRsp_st1_isSpecial,
+    val memRspMetaValid_st1 = Mux(memRsp_st1_isSpecial,
         io.SMSHRMissRspOut.valid,
         io.MSHRMissRspOut.valid)
-    io.memRsp_coreRsp.bits.Rsp.data := Mux(memRsp_st1_isSpecial,
-        MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data,
-        MSHRData_pipeReg.deq.bits.d_data)
+    missRspEntryIdx_st1 := io.MSHRMissRspOut.bits.instrId(log2Up(NMshrEntry)-1,0)
+    // 第一拍 missRspOut 有效时，当前 memRsp 的 d_data 可能正好就是这笔 miss 需要返回的 line。
+    // 命中时直接旁路 live data；否则退回到按 instrId 暂存的数据，确保 metadata/data 属于同一笔事务。
+    val liveMissRspDataMatch_st1 =
+      io.memRsp.valid && memRspisRead && !memRspisSpecial && (idx_st0 === missRspEntryIdx_st1)
+    val missRspData_st1 = Mux(liveMissRspDataMatch_st1, io.memRsp.bits.d_data, missRspDataByInstrId(missRspEntryIdx_st1))
+    // coreRsp
+    io.memRsp_coreRsp.valid := memRspMetaValid_st1
+    io.memRsp_coreRsp.bits.Rsp.data := Mux(memRsp_st1_isSpecial, MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data, missRspData_st1)
     io.memRsp_coreRsp.bits.Rsp.isWrite := false.B
     io.memRsp_coreRsp.bits.Rsp.instrId := missRspTI_st1.instrId
     io.memRsp_coreRsp.bits.Rsp.activeMask := missRspTI_st1.perLaneAddr.map(_.activeMask)
     io.memRsp_coreRsp.bits.perLaneAddr := missRspTI_st1.perLaneAddr
     io.memRsp_coreRsp.bits.validFromCoreReq := false.B
+    io.memRsp_coreRsp.bits.readHitSnapshotValid := false.B
+    io.memRsp_coreRsp.bits.readHitSnapshotData := DontCare
     // write to dA sram
     io.dAmemRsp_wReq.foreach(_.waymask.get := Fill(BytesOfWord, true.B))
     io.dAmemRsp_wReq.foreach(_.setIdx := Cat(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_source(SetIdxBits-1,0),OHToUInt(io.tAWayMask)))
@@ -188,7 +194,8 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val needReplace_pulse = io.needReplace && st1_valid
     val needReplace_pending = RegInit(false.B)
     val needReplace_eff = needReplace_pending || needReplace_pulse
-    // needReplace_pulse 拉高后，到本次 allocate 写回(tag/data)完成前，屏蔽 core 新请求注入
+    // dirty replace 一旦开始，到本次 allocate 写回(tag/data)完成前，屏蔽新的 coreReq 进入。
+    // 否则 victim line 仍可能被新的 hit 请求读/写，破坏 replace 期间采样到的旧数据。
     val blockCoreReqReg = RegInit(false.B)
     when(needReplace_pulse){
       blockCoreReqReg := true.B
@@ -214,11 +221,11 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
             }.elsewhen(st1_valid && !needReplace_eff){
                 tagRequestStatus_next := tagRequestStatus
             }
-          when(needReplace_eff){
-            st1_ready := false.B
-          }.otherwise{
-            st1_ready := io.memRsp_coreRsp.ready
-          }
+            when(needReplace_eff){
+                st1_ready := false.B
+            }.otherwise{
+                st1_ready := io.memRsp_coreRsp.ready
+            }
         }
         is(dAread){
                 tagRequestStatus_next := memReq
@@ -236,6 +243,8 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
             }
         }
     }
+    io.MSHRMissRspOut.ready := io.memRsp_coreRsp.ready
+    io.SMSHRMissRspOut.ready := io.memRsp_coreRsp.ready
     when(tagRequestStatus_next === dAread && st1_valid){
         needReplace_pending := false.B
     }.elsewhen(needReplace_pulse){
