@@ -59,26 +59,15 @@ class pipe() extends Module{
   control.io.sm_id := sm_id
   val operand_collector=Module(new operandCollector)
   if (GVM_ENABLED) {
-    val gvm_xreg = Module(new GvmDutXReg)
-    gvm_xreg.io.clock := clock
-    gvm_xreg.io.sm_id := sm_id
-    // gvm_xreg.io.num_bank := num_bank.U(32.W)
-    // gvm_xreg.io.num_sgpr_slots := NUMBER_SGPR_SLOTS.U(32.W)
-    val scalar_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_SGPR_SLOTS / num_bank * xLen).W)))
-    for (i <- 0 until num_bank) {
-      scalar_flatten_banks(i) := operand_collector.io.scalarBanks.get(i).asUInt
-    }
-    // println(s"checkwidth${scalar_flatten_banks.asUInt.getWidth}")
-    gvm_xreg.io.xbanks := scalar_flatten_banks.asUInt
+    val gvm_xreg_init = Module(new GvmDutWarpXRegInit)
+    gvm_xreg_init.io.clock := clock
+    gvm_xreg_init.io.fire := io.warpReq.fire
+    gvm_xreg_init.io.sm_id := sm_id
+    gvm_xreg_init.io.hardware_warp_id := io.warpReq.bits.wid.pad(32)
+    gvm_xreg_init.io.xregs := operand_collector.io.gvmWarpXRegs.get.asUInt
 
-    val gvm_vreg = Module(new GvmDutVReg)
-    gvm_vreg.io.clock := clock
-    gvm_vreg.io.sm_id := sm_id
-    val vector_flatten_banks = Wire(Vec(num_bank, UInt((NUMBER_VGPR_SLOTS / num_bank * num_thread * xLen).W)))
-    for (i <- 0 until num_bank) {
-      vector_flatten_banks(i) := operand_collector.io.vectorBanks.get(i).asUInt
-    }
-    gvm_vreg.io.vbanks := vector_flatten_banks.asUInt
+    operand_collector.io.gvmWarpHwId.get := io.warpReq.bits.wid
+    operand_collector.io.gvmWarpSgprBase.get := io.warpReq.bits.CTAdata.dispatch2cu_sgpr_base_dispatch
   }
   //val issue=Module(new Issue)
   val issueX = Module(new Issue)

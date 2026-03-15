@@ -32,22 +32,11 @@ void c_GvmDutXRegWriteback(int sm_id,
                             int pc,
                             int inst,
                             int dispatch_id);
-// XRegs
-void c_GvmDutXReg(int num_sm,
-                   int sm_id,
-                   int num_bank,
-                   int num_sgpr_slots,
-                   int xbanks_word,
-                   int xbanks_word_idx);
-// VRegs
-void c_GvmDutVReg(int num_sm,
-                   int sm_id,
-                   int num_bank,
-                   int num_vgpr_slots,
-                   int num_thread,
-                   int vbanks_word,
-                   int vbanks_word_idx,
-                   int thread_idx);
+// New warp XReg snapshot
+void c_GvmDutWarpXRegInit(int sm_id,
+                           int hardware_warp_id,
+                           int xreg_word,
+                           int xreg_word_idx);
 // VReg Writeback  
 void c_GvmDutVRegWriteback(int sm_id,
                             int rd_data,     // 单个线程的向量数据
