@@ -330,6 +330,16 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
         logger->debug("");
     }
 
+#ifdef ENABLE_GVM
+    if (contextp->time() % 2 == 1) {
+        gvm.getDut();
+        if (gvm.gvmStep() != 0) {
+            sim_got_error = true;
+            logger->critical("GVM reported fatal mismatch, stopping simulation");
+        }
+    }
+#endif // ENABLE_GVM
+
     //
     // snapshot fork
     //
@@ -339,13 +349,6 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
     if (!step_status.time_exceed && !step_status.error && contextp->time() % config.snapshot.time_interval == 0) {
         snapshot_fork();
     }
-
-#ifdef ENABLE_GVM
-    if (contextp->time() % 2 == 1) {
-        gvm.getDut();
-        gvm.gvmStep();
-    }
-#endif // ENABLE_GVM
 
     return &step_status;
 }

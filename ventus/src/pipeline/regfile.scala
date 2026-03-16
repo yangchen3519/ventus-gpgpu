@@ -17,11 +17,10 @@ class RegFileBankIO extends Bundle  {
 
 class RegFileBank extends Module  {
   val io = IO(new RegFileBankIO())
-  val regs = SyncReadMem(NUMBER_SGPR_SLOTS/num_bank, UInt(xLen.W))
   val bypassSignal = Wire(Bool())
   bypassSignal := RegNext((io.rsidx===io.rdidx)&io.rdwen)
   if (!GVM_ENABLED) {
-    val regs = SyncReadMem(NUMBER_SGPR_SLOTS/num_bank, UInt(xLen.W)) 
+    val regs = SyncReadMem(NUMBER_SGPR_SLOTS/num_bank, UInt(xLen.W))
     io.rs := Mux(bypassSignal,RegNext(io.rd), regs.read(io.rsidx))
     //io.ready := true.B
     when (io.rdwen) {
@@ -47,7 +46,6 @@ class FloatRegFileBankIO(val unified: Boolean) extends Bundle  {
   val rdwen  = Input(Bool())
   val rdwmask = Input(Vec(num_thread,Bool()))
   val rsType = if(unified) Some(Input(UInt(2.W))) else None
-  val all_regs = if (GVM_ENABLED) Some(Output(Vec(NUMBER_VGPR_SLOTS / num_bank, Vec(num_thread, UInt(xLen.W))))) else None
 }
 class FloatRegFileBank extends Module  {
   val io = IO(new FloatRegFileBankIO(false))
@@ -57,23 +55,10 @@ class FloatRegFileBank extends Module  {
   io.v0 := WireInit(VecInit.fill(num_thread)(~(0.U(xLen.W))))
   internalMask:=io.rdwmask
 
-  if (!GVM_ENABLED) {
-    val regs = SyncReadMem(NUMBER_VGPR_SLOTS/num_bank, Vec(num_thread,UInt(xLen.W)))  //Register files of all warps are divided to number of bank
-    io.rs := Mux(bypassSignal,RegNext(io.rd),regs.read(io.rsidx))
-    when (io.rdwen) {
-      regs.write(io.rdidx, io.rd, internalMask)
-    }
-  } else {
-    val regs_gvm = RegInit(VecInit(Seq.fill(NUMBER_VGPR_SLOTS / num_bank)(VecInit(Seq.fill(num_thread)(0.U(xLen.W))))))
-    io.rs := Mux(bypassSignal, RegNext(io.rd), RegNext(regs_gvm(io.rsidx)))
-    when(io.rdwen) {
-      for (i <- 0 until num_thread) {
-        when(internalMask(i)) {
-          regs_gvm(io.rdidx)(i) := io.rd(i)
-        }
-      }
-    }
-    io.all_regs.get := regs_gvm
+  val regs = SyncReadMem(NUMBER_VGPR_SLOTS/num_bank, Vec(num_thread,UInt(xLen.W)))  //Register files of all warps are divided to number of bank
+  io.rs := Mux(bypassSignal,RegNext(io.rd),regs.read(io.rsidx))
+  when (io.rdwen) {
+    regs.write(io.rdidx, io.rd, internalMask)
   }
 }
 class unifiedBank extends Module  {

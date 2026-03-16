@@ -33,7 +33,39 @@
   {0x0000707f, 0x00003073, "CSRRC"               },\
   {0x0000707f, 0x00007073, "CSRRCI"              },\
   {0x0000707f, 0x00002003, "LW"                  },\
-  {0x0000707f, 0x0000305b, "SETRPC"              },
+  {0x0000707f, 0x0000305b, "SETRPC"              },\
+
+#define SCALAR_SINGLE_CMP_INSNS \
+  {0x0000007f, 0x00000037, "LUI"                 },\
+  {0x0000007f, 0x00000017, "AUIPC"               },\
+  {0x0000007f, 0x0000006f, "JAL"                 },\
+  {0x0000707f, 0x00000067, "JALR"                },\
+  {0x0000707f, 0x00000013, "ADDI"                },\
+  {0x0000707f, 0x00002013, "SLTI"                },\
+  {0x0000707f, 0x00003013, "SLTIU"               },\
+  {0x0000707f, 0x00004013, "XORI"                },\
+  {0xfe00707f, 0x00001013, "SLLI"                },\
+  {0xfe00707f, 0x00005013, "SRLI"                },\
+  {0xfe00707f, 0x40005013, "SRAI"                },\
+  {0xfe00707f, 0x00000033, "ADD"                 },\
+  {0xfe00707f, 0x40000033, "SUB"                 },\
+  {0xfe00707f, 0x00001033, "SLL"                 },\
+  {0xfe00707f, 0x00002033, "SLT"                 },\
+  {0xfe00707f, 0x00003033, "SLTU"                },\
+  {0xfe00707f, 0x00004033, "XOR"                 },\
+  {0xfe00707f, 0x00005033, "SRL"                 },\
+  {0xfe00707f, 0x40005033, "SRA"                 },\
+  {0xfe00707f, 0x00006033, "OR"                  },\
+  {0xfe00707f, 0x00007033, "AND"                 },\
+  {0xfe00707f, 0x02000033, "MUL"                 },\
+  {0x8000707f, 0x00007057, "VSETVLI"             },\
+  {0x0000707f, 0x00002073, "CSRRS"               },\
+  {0x0000707f, 0x00006073, "CSRRSI"              },\
+  {0x0000707f, 0x00001073, "CSRRW"               },\
+  {0x0000707f, 0x00005073, "CSRRWI"              },\
+  {0x0000707f, 0x00003073, "CSRRC"               },\
+  {0x0000707f, 0x00007073, "CSRRCI"              },\
+  {0x0000707f, 0x00002003, "LW"                  },\
 
 #define VREG_INSNS \
   {0xfff0707f, 0x5e004057, "VMV_V_X_              "},\
@@ -88,7 +120,11 @@ const std::vector<care_insn_t> gvm_t::retire_care_insns = {
   XREG_INSNS
   WARP_BARRIER_INSNS
 };
+const std::vector<care_insn_t> gvm_t::scalar_single_insn_cmp_care_insns = {
+  SCALAR_SINGLE_CMP_INSNS
+};
 const std::vector<care_insn_t> gvm_t::single_insn_cmp_care_insns = {
+  SCALAR_SINGLE_CMP_INSNS
   VREG_INSNS
 };
 const std::vector<care_insn_t> gvm_t::fp32_vreg_insns = {

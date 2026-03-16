@@ -68,35 +68,28 @@ void c_GvmDutXRegWriteback(int sm_id,
   g_xreg_wb_data.push_back(d);
 }
 
-// XRegs
-void c_GvmDutXReg(int num_sm,
-                   int sm_id,
-                   int num_bank,
-                   int num_sgpr_slots,
-                   int xbanks_word,
-                   int xbanks_word_idx) {
-  // if std::vector<XRegData> g_xreg_data;为空
-  // 初始化std::vector<XRegData> g_xreg_data，XRegData的个数为num_bank，g_xreg_data(i).bank_data里的word个数为num_sgpr_slots/num_bank
-  // 根据xbanks_word_idx的值，给g_xreg_data(i).bank_data(j)赋值
-  // i = xbanks_word_idx/(num_sgpr_slots/num_bank)
-  // j = xbanks_word_idx%(num_sgpr_slots/num_bank)
-    if (g_xreg_data.empty()) {
-      g_xreg_data.resize(num_sm * num_bank);
-      for (int i = 0; i < num_sm * num_bank; i++) {
-        g_xreg_data[i].bank_data.resize(num_sgpr_slots / num_bank);
-      }
+// New warp XRegs
+void c_GvmDutWarpXRegInit(int sm_id,
+                           int hardware_warp_id,
+                           int xreg_word,
+                           int xreg_word_idx) {
+  WarpXRegInitData* target = nullptr;
+  for (auto& item : g_warp_xreg_init_data) {
+    if (item.sm_id == static_cast<uint32_t>(sm_id)
+        && item.hardware_warp_id == static_cast<uint32_t>(hardware_warp_id)) {
+      target = &item;
+      break;
     }
-
-    g_xreg_data[sm_id*num_bank + xbanks_word_idx/(num_sgpr_slots/num_bank)].sm_id = sm_id;
-    g_xreg_data[sm_id*num_bank + xbanks_word_idx/(num_sgpr_slots/num_bank)].bank_id
-      = xbanks_word_idx/(num_sgpr_slots/num_bank);
-    g_xreg_data[sm_id*num_bank + xbanks_word_idx/(num_sgpr_slots/num_bank)].num_bank = num_bank;
-    g_xreg_data[sm_id*num_bank + xbanks_word_idx/(num_sgpr_slots/num_bank)].num_sgpr_slots
-      = num_sgpr_slots;
-    g_xreg_data[sm_id*num_bank + xbanks_word_idx/(num_sgpr_slots/num_bank)]
-      .bank_data[xbanks_word_idx%(num_sgpr_slots/num_bank)] = xbanks_word;
-
   }
+  if (target == nullptr) {
+    g_warp_xreg_init_data.push_back({static_cast<uint32_t>(sm_id), static_cast<uint32_t>(hardware_warp_id), {}});
+    target = &g_warp_xreg_init_data.back();
+  }
+  if (target->xreg_data.size() <= static_cast<size_t>(xreg_word_idx)) {
+    target->xreg_data.resize(static_cast<size_t>(xreg_word_idx) + 1);
+  }
+  target->xreg_data[static_cast<size_t>(xreg_word_idx)] = static_cast<uint32_t>(xreg_word);
+}
 
 // VReg Writeback
 void c_GvmDutVRegWriteback(int sm_id,
@@ -118,36 +111,6 @@ void c_GvmDutVRegWriteback(int sm_id,
   g_vreg_wb_data[{sm_id, hardware_warp_id, dispatch_id}].insn = inst;
   g_vreg_wb_data[{sm_id, hardware_warp_id, dispatch_id}].dispatch_id = dispatch_id;
   g_vreg_wb_data[{sm_id, hardware_warp_id, dispatch_id}].wvd_mask[thread_idx] = wvd_mask;
-}
-
-// VRegs
-void c_GvmDutVReg(int num_sm,
-                   int sm_id,
-                   int num_bank,
-                   int num_vgpr_slots,
-                   int num_thread,
-                   int vbanks_word,
-                   int vbanks_word_idx,
-                   int thread_idx) {
-    if (g_vreg_data.empty()) {
-      g_vreg_data.resize(num_sm * num_bank);
-      for (int i = 0; i < num_sm * num_bank; i++) {
-        g_vreg_data[i].bank_data.resize(num_vgpr_slots / num_bank);
-        for (int j = 0; j < num_vgpr_slots / num_bank; j++) {
-          g_vreg_data[i].bank_data[j].resize(num_thread);
-        }
-      }
-    }
-
-    int bank_idx = sm_id * num_bank + vbanks_word_idx / (num_vgpr_slots / num_bank);
-    int slot_idx = vbanks_word_idx % (num_vgpr_slots / num_bank);
-
-    g_vreg_data[bank_idx].sm_id = sm_id;
-    g_vreg_data[bank_idx].bank_id = vbanks_word_idx / (num_vgpr_slots / num_bank);
-    g_vreg_data[bank_idx].num_bank = num_bank;
-    g_vreg_data[bank_idx].num_vgpr_slots = num_vgpr_slots;
-    g_vreg_data[bank_idx].num_thread = num_thread;
-    g_vreg_data[bank_idx].bank_data[slot_idx][thread_idx] = vbanks_word;
 }
 
 // Barrier done
