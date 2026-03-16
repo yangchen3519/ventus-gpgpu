@@ -22,5 +22,7 @@ GPGPU_top.v
 GPGPU_top.fir
 GPGPU_top.anno.json
 sim-verilator/verilog-out/
-
+GPU.sv
+__pycache__/
+skills
 gen_fpga_verilog/
