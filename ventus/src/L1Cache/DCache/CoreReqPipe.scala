@@ -21,6 +21,7 @@ import mmu.SV32.{asidLen, paLen, vaLen}
 class CoreReqPipe_st1(implicit p: Parameters) extends DCacheBundle{
   val Req  = new DCacheCoreReq
   val Ctrl = new DCacheControl
+  val fromReplay = Bool()
 }
 class CoreRspPipe_st2(implicit p: Parameters) extends DCacheBundle{
   val Rsp = new DCacheCoreRsp_d
@@ -100,6 +101,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val memRspIsFlu = Input(Bool())
     val st2_ready = Output(Bool())
     val invalidate_tA = Output(Bool())
+
+    val perfReqFire       = Output(Bool())
+    val perfReqFromReplay = Output(Bool())
+    val perfIsRead        = Output(Bool())
+    val perfIsWrite       = Output(Bool())
+    val perfIsUncached    = Output(Bool())
+    val perfIsHit         = Output(Bool())
   })
 
   //====== st0 =======
@@ -249,6 +257,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreReq_pipeReg_st0_st1.enq.valid := st0_valid
   CoreReq_pipeReg_st0_st1.enq.bits.Req := io.CoreReq.bits
   CoreReq_pipeReg_st0_st1.enq.bits.Ctrl := CoreReqControl_st0
+  CoreReq_pipeReg_st0_st1.enq.bits.fromReplay := io.reqSource
   //=== st1 ===
 
   io.tagFromCore_tA_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.tag // check the tag from core with tag from tA block
@@ -258,6 +267,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.perLaneAddr_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
+  val fromReplay_st1 = CoreReq_pipeReg_st0_st1.deq.bits.fromReplay
   io.read_Req_dA.bits.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
   when((CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)&& io.hasDirty){
     io.read_Req_dA.bits.foreach(_.setIdx := Cat(io.tA_dirtySetIdx_st0,OHToUInt(io.tA_dirtyWayMask_st0)))
@@ -500,6 +510,12 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(CoreReq_pipeReg_st0_st1.deq.valid && mshrReleasingSameBlock_st1){
     st1_ready := false.B
   }
+  io.perfReqFire := CoreReq_pipeReg_st0_st1.deq.fire
+  io.perfReqFromReplay := fromReplay_st1
+  io.perfIsRead := Control_st1.isRead
+  io.perfIsWrite := Control_st1.isWrite
+  io.perfIsUncached := Control_st1.isUncached
+  io.perfIsHit := CacheHit_st1
   //write hit
   val getBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
   getBankEn.io.perLaneBlockIdx :=  CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.blockOffset)

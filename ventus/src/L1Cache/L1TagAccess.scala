@@ -50,6 +50,9 @@ class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boo
     val needReplace = if(!readOnly){
       Some(Output(Bool()))
     } else None
+    val replaceValidVictim_st1 = if(!readOnly){
+      Some(Output(Bool()))
+    } else None
     val waymaskReplacement_st1 = Output(UInt(way.W))//one hot, for SRAMTemplate
     val a_addrReplacement_st1 = if (!readOnly) {
       Some(Output(UInt(xLen.W)))
@@ -309,6 +312,7 @@ if(MMU_ENABLED) {
 
   if (!readOnly) {
     io.needReplace.get := way_dirty(allocateWrite_st1.setIdx)(OHToUInt(Replacement.io.waymask_st1)).asBool && RegNext(io.allocateWrite.fire, false.B)
+    io.replaceValidVictim_st1.get := RegNext(io.allocateWrite.fire, false.B) && Replacement.io.Set_is_full
   }
   // ******      tag_array::allocate    ******
   Replacement.io.validOfSet := Reverse(Cat(way_valid(allocateWrite_st1.setIdx)))//Reverse(Cat(way_valid(io.allocateWrite.bits.setIdx)))

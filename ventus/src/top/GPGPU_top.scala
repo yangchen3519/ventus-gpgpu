@@ -351,6 +351,56 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   io.inst_cnt.foreach(_.zipWithIndex.foreach{case (l,r) => l := sm_wrapper(r).inst_cnt.getOrElse(0.U)})
   io.inst_cnt2.foreach(_.zipWithIndex.foreach{case (l,r) => l := sm_wrapper(r).inst_cnt2.getOrElse(0.U)})
 
+  def sumPerfCounter(select: DCachePerfCounters => UInt): UInt = {
+    sm_wrapper.map(sm => select(sm.dcache_perf)).reduce(_ + _)
+  }
+  def percentOf(numer: UInt, denom: UInt): UInt = {
+    Mux(denom === 0.U, 0.U(32.W), ((numer * 100.U) / denom)(31, 0))
+  }
+
+  val l1dTotalReq = sumPerfCounter(_.totalReq)
+  val l1dReadHit = sumPerfCounter(_.readHit)
+  val l1dWriteHit = sumPerfCounter(_.writeHit)
+  val l1dReadMiss = sumPerfCounter(_.readMiss)
+  val l1dWriteMiss = sumPerfCounter(_.writeMiss)
+  val l1dReplacement = sumPerfCounter(_.replacements)
+  val l1dDirtyWriteback = sumPerfCounter(_.dirtyWritebacks)
+  val l1dTotalHit = l1dReadHit + l1dWriteHit
+  val l1dReadReq = l1dReadHit + l1dReadMiss
+  val l1dWriteReq = l1dWriteHit + l1dWriteMiss
+
+  val pendingWgCount = RegInit(0.U(32.W))
+  val programActive = RegInit(false.B)
+  val hostReqFire = io.host_req.fire
+  val hostRspFire = io.host_rsp.fire
+  val pendingWgCountNext = WireInit(pendingWgCount)
+  when(hostReqFire && !hostRspFire){
+    pendingWgCountNext := pendingWgCount + 1.U
+  }.elsewhen(!hostReqFire && hostRspFire){
+    pendingWgCountNext := pendingWgCount - 1.U
+  }
+  pendingWgCount := pendingWgCountNext
+  when(hostReqFire){
+    programActive := true.B
+  }
+  val programDonePulse =
+    programActive &&
+      (pendingWgCount =/= 0.U) &&
+      (pendingWgCountNext === 0.U) &&
+      !io.host_req.valid
+  when(programDonePulse){
+    programActive := false.B
+    printf(p"\n[L1D PERF] program finished\n")
+    printf(p"[L1D PERF] total requests      : ${l1dTotalReq}\n")
+    printf(p"[L1D PERF] hit rate            : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
+    printf(p"[L1D PERF] read hit rate       : ${percentOf(l1dReadHit, l1dReadReq)}% (${l1dReadHit}/${l1dReadReq})\n")
+    printf(p"[L1D PERF] write hit rate      : ${percentOf(l1dWriteHit, l1dWriteReq)}% (${l1dWriteHit}/${l1dWriteReq})\n")
+    printf(p"[L1D PERF] read miss rate      : ${percentOf(l1dReadMiss, l1dReadReq)}% (${l1dReadMiss}/${l1dReadReq})\n")
+    printf(p"[L1D PERF] write miss rate     : ${percentOf(l1dWriteMiss, l1dWriteReq)}% (${l1dWriteMiss}/${l1dWriteReq})\n")
+    printf(p"[L1D PERF] replacements        : ${l1dReplacement}\n")
+    printf(p"[L1D PERF] dirty writebacks    : ${l1dDirtyWriteback}\n")
+  }
+
   for(i <- 0 until NL2Cache){
     val port = l2cache(i).in_a
     val cache_id: UInt = port.bits.source(l1cache_sourceBits)
@@ -375,6 +425,7 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
     val CTArsp=(Decoupled(new CTArspData))
     val memRsp = Flipped(DecoupledIO(new L1CacheMemRsp()(param)))
     val memReq = DecoupledIO(new L1CacheMemReq)
+    val dcache_perf = Output(new DCachePerfCounters)
     val inst = if (SINGLE_INST) Some(Flipped(DecoupledIO(UInt(32.W)))) else None
     val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
     val l2tlbReq = if(MMU_ENABLED) Some(Vec(num_cache_in_sm, DecoupledIO(new Bundle{
@@ -474,6 +525,7 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   pipe.io.dcache_rsp.bits.activeMask:=dcache.io.coreRsp.bits.activeMask
   //pipe.io.dcache_rsp.bits.isWrite:=dcache.io.coreRsp.bits.isWrite
   dcache.io.coreRsp.ready:=pipe.io.dcache_rsp.ready
+  io.dcache_perf := dcache.io.perf
 
   assert(num_cache_in_sm == 2, "Now only support 2 L1 Caches(one L1I and one L1D) in a single SM")
 if(MMU_ENABLED) {

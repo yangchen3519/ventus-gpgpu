@@ -29,6 +29,16 @@ class WshrMemReqV2 extends DCacheMemReq {
   val Asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
 }
 
+class DCachePerfCounters extends Bundle {
+  val totalReq = UInt(64.W)
+  val readHit = UInt(64.W)
+  val writeHit = UInt(64.W)
+  val readMiss = UInt(64.W)
+  val writeMiss = UInt(64.W)
+  val replacements = UInt(64.W)
+  val dirtyWritebacks = UInt(64.W)
+}
+
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
   val io = IO(new Bundle{
     val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
@@ -37,6 +47,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     val memReq = if(MMU_ENABLED) Some(DecoupledIO(new DCacheMemReq_p)) else Some(DecoupledIO(new DCacheMemReq))
     val TLBRsp = if(MMU_ENABLED) Some(Flipped(DecoupledIO(new mmu.L1TlbRsp(SV.getOrElse(mmu.SV32))))) else None
     val TLBReq = if(MMU_ENABLED) Some(DecoupledIO(new mmu.L1TlbReq(SV.getOrElse(mmu.SV32)))) else None
+    val perf = Output(new DCachePerfCounters)
   })
   // submodules
   val TagAccess = Module(new L1TagAccess(set=NSets, way=NWays, tagBits=TagBits,AsidBits = asidLen,readOnly=false))
@@ -65,6 +76,13 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
   val dirtyReplaceMemReq = Wire(new WshrMemReqV2)
   val coreWriteHitFire = coreReqPipe.io.st1_valid && coreReqPipe.io.st1_ready && coreReqPipe.io.WriteHit_st1
+  val totalReqCnt = RegInit(0.U(64.W))
+  val readHitCnt = RegInit(0.U(64.W))
+  val writeHitCnt = RegInit(0.U(64.W))
+  val readMissCnt = RegInit(0.U(64.W))
+  val writeMissCnt = RegInit(0.U(64.W))
+  val replacementCnt = RegInit(0.U(64.W))
+  val dirtyWritebackCnt = RegInit(0.U(64.W))
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
@@ -88,8 +106,6 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   when(replaceMemReqFire){
     replaceDataValid := false.B
   }
-
-  io.memRsp <> memRsp_Q.io.enq
   // core request arbiter
   // source: RTAB top request / core request from io
   val blockCoreReq = memRspPipe.io.blockCoreReq
@@ -295,6 +311,33 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   }
   WshrAccess.io.pushReq.valid := PushWshrValid//Mux(wshrPushPopConflictReg,true.B,Mux(WshrPushPopConflict,false.B,PushWshrValid))//wshrPass && memReq_Q.io.deq.fire() && memReqIsWrite_st3
   coreRsp_st2_valid_from_memReq := WshrAccess.io.pushReq.valid && memReq_Q.io.deq.bits.hasCoreRsp && !memRspPipe.io.memRsp_coreRsp.valid
+  val perfCoreReqFire =
+    coreReqPipe.io.perfReqFire &&
+      !coreReqPipe.io.perfReqFromReplay &&
+      !coreReqPipe.io.perfIsUncached
+  val perfReadFire = perfCoreReqFire && coreReqPipe.io.perfIsRead
+  val perfWriteFire = perfCoreReqFire && coreReqPipe.io.perfIsWrite
+  when(perfCoreReqFire){
+    totalReqCnt := totalReqCnt + 1.U
+  }
+  when(perfReadFire && coreReqPipe.io.perfIsHit){
+    readHitCnt := readHitCnt + 1.U
+  }
+  when(perfWriteFire && coreReqPipe.io.perfIsHit){
+    writeHitCnt := writeHitCnt + 1.U
+  }
+  when(perfReadFire && !coreReqPipe.io.perfIsHit){
+    readMissCnt := readMissCnt + 1.U
+  }
+  when(perfWriteFire && !coreReqPipe.io.perfIsHit){
+    writeMissCnt := writeMissCnt + 1.U
+  }
+  when(TagAccess.io.replaceValidVictim_st1.get){
+    replacementCnt := replacementCnt + 1.U
+  }
+  when(replaceMemReqFire){
+    dirtyWritebackCnt := dirtyWritebackCnt + 1.U
+  }
   MMU_ENABLED match{
     case true =>{
       memReq_Q.io.deq.ready := Mux(a_op_st3_isFlush,io.memReq.get.ready && !memRspPipe.io.memRsp_coreRsp.valid,(waitTLB.get === 2.U) && (waitTLBnext.get === 0.U))
@@ -397,6 +440,13 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     memReq_valid := memReq_Q.io.deq.fire
   }
   io.memReq.get.valid := memReq_valid
+  io.perf.totalReq := totalReqCnt
+  io.perf.readHit := readHitCnt
+  io.perf.writeHit := writeHitCnt
+  io.perf.readMiss := readMissCnt
+  io.perf.writeMiss := writeMissCnt
+  io.perf.replacements := replacementCnt
+  io.perf.dirtyWritebacks := dirtyWritebackCnt
   // print 
   if(DCACHE_DEBUG){
     when(io.coreReq.fire){
