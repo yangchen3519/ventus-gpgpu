@@ -1,5 +1,5 @@
 #include "ventus_rtlsim_impl.hpp"
-#include "gvmref_interface.h" // apis from spike repo
+#include "../../spike/gvmref/gvmref_interface.h"
 #include <ctime>
 
 static char verilator_rand_seed_setting[128] = "+verilator+seed+10086";

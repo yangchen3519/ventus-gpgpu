@@ -9,7 +9,7 @@
 #include <memory>
 #include <spdlog/logger.h>
 
-#include "gvmref_interface.h"
+#include "../../spike/gvmref/gvmref_interface.h"
 #include "gvm_global_var.hpp"
 
 struct care_insn_t {
