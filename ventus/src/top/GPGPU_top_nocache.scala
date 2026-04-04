@@ -9,6 +9,7 @@ import pipeline.{ICachePipeReq_np, ICachePipeRsp_np, DCacheCoreReq_np, DCacheCor
 import L1Cache.ShareMem.SharedMemory
 import chisel3.experimental.hierarchy.{Definition, Instance, instantiable, public, Instantiate}
 import config.config.Parameters
+import gvm._
 
 class SMIO_icache(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends ICacheBundle {
   val req = DecoupledIO(new ICacheMemReq_p(SV.getOrElse(mmu.SV32)))
@@ -83,6 +84,23 @@ class SM_wrapper_nocache() extends Module {
   icache.io.memRsp :<>= io.icache.rsp
   io.dcache_req :<>= pipe.io.dcache_req
   pipe.io.dcache_rsp :<>= io.dcache_rsp
+
+  if(GVM_ENABLED){
+    val WF_ID_WIDTH = log2Ceil(num_warp_in_a_block)
+    val gvm_cta2warp = Module(new GvmDutCta2Warp)
+    gvm_cta2warp.io.clock := clock
+    gvm_cta2warp.io.warp_req_fire := cta2warp.io.warpReq.fire
+    gvm_cta2warp.io.software_wg_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wg_id.pad(32)
+    gvm_cta2warp.io.software_warp_id :=
+      cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(WF_ID_WIDTH - 1, 0).pad(32)
+    gvm_cta2warp.io.sm_id := sm_id
+    gvm_cta2warp.io.hardware_warp_id := cta2warp.io.warpReq.bits.wid.pad(32)
+    gvm_cta2warp.io.sgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_sgpr_base_dispatch.pad(32)
+    gvm_cta2warp.io.vgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_vgpr_base_dispatch.pad(32)
+    gvm_cta2warp.io.wg_slot_id_in_warp_sche :=
+      cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH - 1, WF_ID_WIDTH)
+    gvm_cta2warp.io.rtl_num_thread := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_size_dispatch.pad(32)
+  }
 }
 
 class GPGPU_top_nocache() extends Module {

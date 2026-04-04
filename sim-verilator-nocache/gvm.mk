@@ -11,6 +11,8 @@ GVM_TRACE ?= 1
 
 export RTL_GVM_ENABLED = true
 
+VLIB_TOP_MODULE ?= GPGPU_top_nocache
+
 #=====================================================================
 # Helpers
 #=====================================================================
@@ -35,8 +37,6 @@ export VERILATOR_ROOT
 VLIB_VERILATOR = $(VERILATOR_ROOT)/bin/verilator
 VLIB_VERILATOR_COVERAGE = $(VERILATOR_ROOT)/bin/verilator_coverage
 endif
-
-VLIB_TOP_MODULE ?= GPGPU_SimTop
 
 CCACHE = $(shell which ccache)
 ifeq ($(CCACHE),)
@@ -122,7 +122,6 @@ VLIB_VERILATOR_FLAGS += --assert
 #VLIB_VERILATOR_FLAGS += --debug
 # Add this trace to get a backtrace in gdb
 #VLIB_VERILATOR_FLAGS += --gdbbt
-# Disable DPI threads to avoid issues with some toolchains
 
 VLIB_VERILATOR_FLAGS += --top-module $(VLIB_TOP_MODULE)
 
@@ -158,10 +157,9 @@ default: lib
 
 $(VLIB_SRC_V) parameters.json &: $(VLIB_SRC_SCALA)
 	mkdir -p $(VLIB_SRC_V_DIR)
-	cd .. && ./mill ventus[6.4.0].runMain top.paramToJson
-	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_SimTop --target chirrtl --target-dir sim-verilator/$(VLIB_SRC_V_DIR)/
-	cd $(VLIB_SRC_V_DIR)/ && firtool --split-verilog GPGPU_SimTop.fir -o .
-	mv $(VLIB_SRC_V_DIR)/GPGPU_SimTop.sv $(VLIB_SRC_V)
+	cd .. && ./mill ventus[6.4.0].runMain circt.stage.ChiselMain --module top.GPGPU_top_nocache --target chirrtl --target-dir sim-verilator-nocache/$(VLIB_SRC_V_DIR)/
+	cd $(VLIB_SRC_V_DIR)/ && firtool --split-verilog GPGPU_top_nocache.fir -o .
+	mv $(VLIB_SRC_V_DIR)/GPGPU_top_nocache.sv $(VLIB_SRC_V)
 	find $(VLIB_SRC_V_DIR) -name "*.sv" -type f -exec sed -i '1i\`define PRINTF_COND 1' {} \;
 
 rtl_parameters.cpp: parameters.json json2cpp.py
@@ -199,7 +197,7 @@ info-verilator:
 install: $(VLIB_TARGET)
 	install -d $(PREFIX)/lib
 	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/
-	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/lib$(VLIB_TARGET_NAME)-withcache.so
+	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/lib$(VLIB_TARGET_NAME)-nocache.so
 	install -d $(PREFIX)/include
 	install -m 644 ventus_rtlsim.h $(PREFIX)/include/
 
