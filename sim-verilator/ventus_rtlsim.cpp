@@ -108,6 +108,9 @@ extern "C" int fw_vt_copy_to_dev(uint64_t dev_vaddr,const void *src_addr, uint64
 extern "C" int fw_vt_start(void* metaData, uint64_t taskID) {
     return gvmref_vt_start(metaData, taskID);
 }
+extern "C" int fw_vt_kernel_finish() {
+    return gvmref_vt_kernel_finish();
+}
 extern "C" int fw_vt_upload_kernel_file(const char* filename, int taskID) {
     return gvmref_vt_upload_kernel_file(filename, taskID);
 }
