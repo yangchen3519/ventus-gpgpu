@@ -28,7 +28,7 @@ public:
 private:
   std::map<warp_key_t, dut_active_warp_t> dut_active_warps;
   std::unordered_map<uint64_t, warp_key_t> hw_warp_to_sw_warp;
-  std::unordered_map<uint64_t, warp_key_t> sm_wgslot_to_sw_warp;
+  std::unordered_map<uint64_t, uint32_t> sm_wgslot_to_sw_wg;
   std::unordered_map<uint32_t, bool> retire_care_cache;
   std::unordered_map<uint32_t, bool> scalar_single_cmp_care_cache;
   std::unordered_map<uint32_t, bool> single_cmp_care_cache;
@@ -61,6 +61,7 @@ private:
   void resetRetireInfo();
   static uint64_t makeHwWarpKey(uint32_t sm_id, uint32_t hardware_warp_id);
   static uint64_t makeSmWgslotKey(uint32_t sm_id, uint32_t wg_slot_id);
+  uint32_t getNumWgSlotPerSm();
   dut_active_warp_t* findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id);
   const dut_active_warp_t* findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id) const;
   bool isInsnCareCached(
