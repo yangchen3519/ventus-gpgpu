@@ -31,12 +31,21 @@ class WshrMemReqV2 extends DCacheMemReq {
 
 class DCachePerfCounters extends Bundle {
   val totalReq = UInt(64.W)
-  val readHit = UInt(64.W)
-  val writeHit = UInt(64.W)
+  val readReq = UInt(64.W)
+  val writeReq = UInt(64.W)
   val readMiss = UInt(64.W)
   val writeMiss = UInt(64.W)
+  val readPrimaryMiss = UInt(64.W)
+  val readSecondaryMiss = UInt(64.W)
+  val readPrimaryFullMiss = UInt(64.W)
+  val readSecondaryFullMiss = UInt(64.W)
+  val writeFreshMiss = UInt(64.W)
+  val writeInflightMiss = UInt(64.W)
   val replacements = UInt(64.W)
   val dirtyWritebacks = UInt(64.W)
+  val mshrFullCycles = UInt(64.W)
+  val rtabReplays = UInt(64.W)
+  val bankConflictCycles = UInt(64.W)
 }
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
@@ -47,6 +56,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     val memReq = if(MMU_ENABLED) Some(DecoupledIO(new DCacheMemReq_p)) else Some(DecoupledIO(new DCacheMemReq))
     val TLBRsp = if(MMU_ENABLED) Some(Flipped(DecoupledIO(new mmu.L1TlbRsp(SV.getOrElse(mmu.SV32))))) else None
     val TLBReq = if(MMU_ENABLED) Some(DecoupledIO(new mmu.L1TlbReq(SV.getOrElse(mmu.SV32)))) else None
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
     val perf = Output(new DCachePerfCounters)
   })
   // submodules
@@ -77,12 +88,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val dirtyReplaceMemReq = Wire(new WshrMemReqV2)
   val coreWriteHitFire = coreReqPipe.io.st1_valid && coreReqPipe.io.st1_ready && coreReqPipe.io.WriteHit_st1
   val totalReqCnt = RegInit(0.U(64.W))
-  val readHitCnt = RegInit(0.U(64.W))
-  val writeHitCnt = RegInit(0.U(64.W))
+  val readReqCnt = RegInit(0.U(64.W))
+  val writeReqCnt = RegInit(0.U(64.W))
   val readMissCnt = RegInit(0.U(64.W))
   val writeMissCnt = RegInit(0.U(64.W))
+  val readPrimaryMissCnt = RegInit(0.U(64.W))
+  val readSecondaryMissCnt = RegInit(0.U(64.W))
+  val readPrimaryFullMissCnt = RegInit(0.U(64.W))
+  val readSecondaryFullMissCnt = RegInit(0.U(64.W))
+  val writeFreshMissCnt = RegInit(0.U(64.W))
+  val writeInflightMissCnt = RegInit(0.U(64.W))
   val replacementCnt = RegInit(0.U(64.W))
   val dirtyWritebackCnt = RegInit(0.U(64.W))
+  val mshrFullCyclesCnt = RegInit(0.U(64.W))
+  val rtabReplayCnt = RegInit(0.U(64.W))
+  val bankConflictCyclesCnt = RegInit(0.U(64.W))
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
@@ -94,6 +114,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val DataAccessRRsp = DataAccesses.map(d => d.io.r.resp.data)
   val DataAccessReadSRAMRRsp = DataAccessRRsp.map(d => Cat(d.reverse))
   val replaceMemReqFire = Wire(Bool())
+  val perfBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
   val replaceReadResp = RegNext(memRspPipe.io.dAReplace_rReq_valid, false.B)
   val replaceDataValid = RegInit(false.B)
   val replaceDataReg = Reg(Vec(BlockWords, UInt(WordLength.W)))
@@ -106,6 +127,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   when(replaceMemReqFire){
     replaceDataValid := false.B
   }
+  perfBankEn.io.perLaneBlockIdx := coreReqPipe.io.perLaneAddr_st1.map(_.blockOffset)
+  perfBankEn.io.perLaneValid := coreReqPipe.io.perLaneAddr_st1.map(_.activeMask)
   // core request arbiter
   // source: RTAB top request / core request from io
   val blockCoreReq = memRspPipe.io.blockCoreReq
@@ -317,26 +340,113 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
       !coreReqPipe.io.perfIsUncached
   val perfReadFire = perfCoreReqFire && coreReqPipe.io.perfIsRead
   val perfWriteFire = perfCoreReqFire && coreReqPipe.io.perfIsWrite
-  when(perfCoreReqFire){
-    totalReqCnt := totalReqCnt + 1.U
-  }
-  when(perfReadFire && coreReqPipe.io.perfIsHit){
-    readHitCnt := readHitCnt + 1.U
-  }
-  when(perfWriteFire && coreReqPipe.io.perfIsHit){
-    writeHitCnt := writeHitCnt + 1.U
-  }
-  when(perfReadFire && !coreReqPipe.io.perfIsHit){
-    readMissCnt := readMissCnt + 1.U
-  }
-  when(perfWriteFire && !coreReqPipe.io.perfIsHit){
-    writeMissCnt := writeMissCnt + 1.U
-  }
-  when(TagAccess.io.replaceValidVictim_st1.get){
-    replacementCnt := replacementCnt + 1.U
-  }
-  when(replaceMemReqFire){
-    dirtyWritebackCnt := dirtyWritebackCnt + 1.U
+  val perfReadMissFire = perfReadFire && !coreReqPipe.io.perfIsHit
+  val perfWriteMissFire = perfWriteFire && !coreReqPipe.io.perfIsHit
+  val perfMshrStatus = MshrAccess.io.probeOut_st1.probeStatus
+  val perfWshrHit = WshrAccess.io.checkresult.Hit
+  val perfReadPrimaryMissFire =
+    perfReadMissFire &&
+      !perfWshrHit &&
+      (perfMshrStatus === MSHRStatus.PrimaryAvail)
+  val perfReadSecondaryMissFire =
+    perfReadMissFire &&
+      ((perfMshrStatus === MSHRStatus.SecondaryAvail) || perfWshrHit)
+  val perfReadPrimaryFullMissFire =
+    perfReadMissFire &&
+      (perfMshrStatus === MSHRStatus.PrimaryFull)
+  val perfReadSecondaryFullMissFire =
+    perfReadMissFire &&
+      (perfMshrStatus === MSHRStatus.SecondaryFull)
+  val perfWriteFreshMissFire =
+    perfWriteMissFire &&
+      !perfWshrHit &&
+      (perfMshrStatus === MSHRStatus.PrimaryAvail)
+  val perfWriteInflightMissFire =
+    perfWriteMissFire &&
+      (perfWshrHit ||
+        (perfMshrStatus === MSHRStatus.SecondaryAvail) ||
+        (perfMshrStatus === MSHRStatus.SecondaryFull))
+  val perfMissBlockedByMSHRFull =
+    io.perfEnable &&
+      coreReqPipe.io.st1_valid &&
+      !coreReqPipe.io.perfReqFromReplay &&
+      !coreReqPipe.io.coreReq_Control_st1.isUncached &&
+      (coreReqPipe.io.coreReq_Control_st1.isRead || coreReqPipe.io.coreReq_Control_st1.isWrite) &&
+      !coreReqPipe.io.CacheHit_st1 &&
+      ((MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.PrimaryFull) ||
+        (MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.SecondaryFull))
+  val perfDistinctBanks = PopCount(Cat(perfBankEn.io.perBankValid))
+  val perfActiveLanes = PopCount(Cat(coreReqPipe.io.perLaneAddr_st1.map(_.activeMask)))
+  val perfBankConflictFire =
+    perfCoreReqFire &&
+      coreReqPipe.io.perfIsHit &&
+      (perfActiveLanes > perfDistinctBanks)
+  when(io.perfReset){
+    totalReqCnt := 0.U
+    readReqCnt := 0.U
+    writeReqCnt := 0.U
+    readMissCnt := 0.U
+    writeMissCnt := 0.U
+    readPrimaryMissCnt := 0.U
+    readSecondaryMissCnt := 0.U
+    readPrimaryFullMissCnt := 0.U
+    readSecondaryFullMissCnt := 0.U
+    writeFreshMissCnt := 0.U
+    writeInflightMissCnt := 0.U
+    replacementCnt := 0.U
+    dirtyWritebackCnt := 0.U
+    mshrFullCyclesCnt := 0.U
+    rtabReplayCnt := 0.U
+    bankConflictCyclesCnt := 0.U
+  }.otherwise{
+    when(perfCoreReqFire){
+      totalReqCnt := totalReqCnt + 1.U
+    }
+    when(perfReadFire){
+      readReqCnt := readReqCnt + 1.U
+    }
+    when(perfWriteFire){
+      writeReqCnt := writeReqCnt + 1.U
+    }
+    when(perfReadMissFire){
+      readMissCnt := readMissCnt + 1.U
+    }
+    when(perfWriteMissFire){
+      writeMissCnt := writeMissCnt + 1.U
+    }
+    when(perfReadPrimaryMissFire){
+      readPrimaryMissCnt := readPrimaryMissCnt + 1.U
+    }
+    when(perfReadSecondaryMissFire){
+      readSecondaryMissCnt := readSecondaryMissCnt + 1.U
+    }
+    when(perfReadPrimaryFullMissFire){
+      readPrimaryFullMissCnt := readPrimaryFullMissCnt + 1.U
+    }
+    when(perfReadSecondaryFullMissFire){
+      readSecondaryFullMissCnt := readSecondaryFullMissCnt + 1.U
+    }
+    when(perfWriteFreshMissFire){
+      writeFreshMissCnt := writeFreshMissCnt + 1.U
+    }
+    when(perfWriteInflightMissFire){
+      writeInflightMissCnt := writeInflightMissCnt + 1.U
+    }
+    when(TagAccess.io.replaceValidVictim_st1.get){
+      replacementCnt := replacementCnt + 1.U
+    }
+    when(replaceMemReqFire){
+      dirtyWritebackCnt := dirtyWritebackCnt + 1.U
+    }
+    when(perfMissBlockedByMSHRFull){
+      mshrFullCyclesCnt := mshrFullCyclesCnt + 1.U
+    }
+    when(ReplayTable.io.coreReq_replay.fire){
+      rtabReplayCnt := rtabReplayCnt + 1.U
+    }
+    when(perfBankConflictFire){
+      bankConflictCyclesCnt := bankConflictCyclesCnt + 1.U
+    }
   }
   MMU_ENABLED match{
     case true =>{
@@ -441,12 +551,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   }
   io.memReq.get.valid := memReq_valid
   io.perf.totalReq := totalReqCnt
-  io.perf.readHit := readHitCnt
-  io.perf.writeHit := writeHitCnt
+  io.perf.readReq := readReqCnt
+  io.perf.writeReq := writeReqCnt
   io.perf.readMiss := readMissCnt
   io.perf.writeMiss := writeMissCnt
+  io.perf.readPrimaryMiss := readPrimaryMissCnt
+  io.perf.readSecondaryMiss := readSecondaryMissCnt
+  io.perf.readPrimaryFullMiss := readPrimaryFullMissCnt
+  io.perf.readSecondaryFullMiss := readSecondaryFullMissCnt
+  io.perf.writeFreshMiss := writeFreshMissCnt
+  io.perf.writeInflightMiss := writeInflightMissCnt
   io.perf.replacements := replacementCnt
   io.perf.dirtyWritebacks := dirtyWritebackCnt
+  io.perf.mshrFullCycles := mshrFullCyclesCnt
+  io.perf.rtabReplays := rtabReplayCnt
+  io.perf.bankConflictCycles := bankConflictCyclesCnt
   // print 
   if(DCACHE_DEBUG){
     when(io.coreReq.fire){

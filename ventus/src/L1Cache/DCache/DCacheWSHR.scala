@@ -21,6 +21,7 @@ class DCacheWSHR(Depth:Int) extends Module{
     val pushedIdx = Output(UInt(log2Up(Depth).W))
     //for invOrFlu
     val empty = Output(Bool())
+    val usedEntries = Output(UInt((log2Up(Depth)+1).W))
     //pop
     val popReq = Flipped(ValidIO(UInt(log2Up(Depth).W)))
     //check
@@ -33,6 +34,7 @@ class DCacheWSHR(Depth:Int) extends Module{
   val blockAddrEntries = RegInit(VecInit(Seq.fill(Depth)(0.U((paLen - dcache_BlockOffsetBits - dcache_WordOffsetBits).W))))
   val valid: Vec[Bool] = RegInit(VecInit(Seq.fill(Depth)(false.B)))
   io.empty := !valid.reduceTree(_|_)
+  io.usedEntries := PopCount(valid)
 
   //following circuit are same to L1TagAccess.scala tagChecker
   val pushMatchMask = Wire(UInt(Depth.W))
@@ -67,5 +69,4 @@ class DCacheWSHR(Depth:Int) extends Module{
     valid(io.popReq.bits) := false.B
   }
 }
-
 

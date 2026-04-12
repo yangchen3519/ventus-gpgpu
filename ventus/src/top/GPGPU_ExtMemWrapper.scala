@@ -33,6 +33,7 @@ class GPGPU_ExtMemWrapper(C: TestCase#Props) extends Module{
   //todo multiple l2c
   cpu_test.io.host2cta<>GPU.io.host_req
   cpu_test.io.cta2host<>GPU.io.host_rsp
+  GPU.io.perfDump := false.B
   for(i<-0 until num_l2cache){
     ExtMem(i).memReq <> GPU.io.out_a(i)
     GPU.io.out_d(i) <> ExtMem(i).memRsp

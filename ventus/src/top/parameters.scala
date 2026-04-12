@@ -13,6 +13,8 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
   val SPIKE_OUTPUT: Boolean = true
   val INST_CNT: Boolean = true
   val INST_CNT_2: Boolean = false
+  val PMU_PIPELINE: Boolean = true
+  val PMU_INST_CLASS: Boolean = true
   val GVM_ENABLED: Boolean = sys.env.getOrElse("RTL_GVM_ENABLED", "false").toBoolean
   val MMU_ENABLED: Boolean = false
   val DCACHE_DEBUG: Boolean = false

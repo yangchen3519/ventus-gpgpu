@@ -48,6 +48,10 @@ class pipe() extends Module{
     val inst = if (SINGLE_INST) Some(Flipped(DecoupledIO(UInt(32.W)))) else None
     val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
+    val perf_pipeline = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
+    val perf_inst_class = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
   })
   val issue_stall=Wire(Bool())
   val flush=Wire(Bool())
@@ -157,7 +161,8 @@ class pipe() extends Module{
   warp_sche.io.warp_control<>issueX.io.out_warpscheduler
   warp_sche.io.issued_warp.bits:=exe_dataX.io.enq.bits.ctrl.wid // not used
   warp_sche.io.issued_warp.valid:=exe_dataX.io.enq.fire // not used
-  warp_sche.io.scoreboard_busy:=(VecInit(scoreb.map(_.delay))).asUInt
+  val scoreboardBusy = (VecInit(scoreb.map(_.delay))).asUInt
+  warp_sche.io.scoreboard_busy:=scoreboardBusy
 
   csrfile.io.CTA2csr:=warp_sche.io.CTA2csr
   val init_thread_mask = (1.U(num_thread.W) << warp_sche.io.CTA2csr.bits.CTAdata.dispatch2cu_wf_size_dispatch).asUInt - 1.U
@@ -429,6 +434,116 @@ class pipe() extends Module{
   wb.io.in_v(4)<>mul.io.out_v
   wb.io.in_v(5)<>tensorcore.io.out_v
   wb.io.in_v(6)<>csrfile.io.out_v
+
+  val activeCycles = RegInit(0.U(64.W))
+  val totalScalarIssued = RegInit(0.U(64.W))
+  val totalVectorIssued = RegInit(0.U(64.W))
+  val execStructuralHazardCyclesX = RegInit(0.U(64.W))
+  val execStructuralHazardCyclesV = RegInit(0.U(64.W))
+  val dataDepStallCycles = RegInit(0.U(64.W))
+  val controlHazardFlushCount = RegInit(0.U(64.W))
+  val frontendStallCycles = RegInit(0.U(64.W))
+  val lsuBackpressureCycles = RegInit(0.U(64.W))
+  val ibufferFullCycles = RegInit(0.U(64.W))
+
+  val computeIssued = RegInit(0.U(64.W))
+  val memIssued = RegInit(0.U(64.W))
+  val ctrlIssued = RegInit(0.U(64.W))
+
+  def isCtrlInst(ctrl: CtrlSigs): Bool = {
+    ctrl.csr.orR || ctrl.barrier || ctrl.simt_stack || ctrl.branch.orR
+  }
+
+  val anyBufferedInst = VecInit(ibuffer.io.out.map(_.valid)).asUInt.orR
+  val anySchedulableInst = VecInit((0 until num_warp).map(i => ibuffer.io.out(i).valid && warp_sche.io.warp_ready(i))).asUInt.orR
+  val anyScoreExeBlockedInst = VecInit((0 until num_warp).map(i => ibuffer.io.out(i).valid && (scoreboardBusy(i) || warp_sche.io.exe_busy(i)))).asUInt.orR
+  val noIssueFire = !issueX.io.in.fire && !issueV.io.in.fire
+  val noIssueInput = !issueX.io.in.valid && !issueV.io.in.valid
+  val dataDepStall = noIssueFire && noIssueInput && anyBufferedInst && !anySchedulableInst && anyScoreExeBlockedInst
+  val frontendStall = noIssueFire && noIssueInput && !dataDepStall
+
+  val flushEvent = warp_sche.io.flush.valid && !RegNext(warp_sche.io.flush.valid, false.B)
+
+  when(io.perfReset){
+    activeCycles := 0.U
+    totalScalarIssued := 0.U
+    totalVectorIssued := 0.U
+    execStructuralHazardCyclesX := 0.U
+    execStructuralHazardCyclesV := 0.U
+    dataDepStallCycles := 0.U
+    controlHazardFlushCount := 0.U
+    frontendStallCycles := 0.U
+    lsuBackpressureCycles := 0.U
+    ibufferFullCycles := 0.U
+    computeIssued := 0.U
+    memIssued := 0.U
+    ctrlIssued := 0.U
+  }.elsewhen(io.perfEnable){
+    activeCycles := activeCycles + 1.U
+
+    when(issueX.io.in.fire){
+      totalScalarIssued := totalScalarIssued + 1.U
+      when(issueX.io.in.bits.ctrl.mem){
+        memIssued := memIssued + 1.U
+      }.elsewhen(isCtrlInst(issueX.io.in.bits.ctrl)){
+        ctrlIssued := ctrlIssued + 1.U
+      }.otherwise{
+        computeIssued := computeIssued + 1.U
+      }
+    }
+
+    when(issueV.io.in.fire){
+      totalVectorIssued := totalVectorIssued + 1.U
+      when(issueV.io.in.bits.ctrl.mem){
+        memIssued := memIssued + 1.U
+      }.elsewhen(isCtrlInst(issueV.io.in.bits.ctrl)){
+        ctrlIssued := ctrlIssued + 1.U
+      }.otherwise{
+        computeIssued := computeIssued + 1.U
+      }
+    }
+
+    when(issueX.io.in.valid && !issueX.io.in.ready){
+      execStructuralHazardCyclesX := execStructuralHazardCyclesX + 1.U
+    }
+    when(issueV.io.in.valid && !issueV.io.in.ready){
+      execStructuralHazardCyclesV := execStructuralHazardCyclesV + 1.U
+    }
+    when(dataDepStall){
+      dataDepStallCycles := dataDepStallCycles + 1.U
+    }
+    when(frontendStall){
+      frontendStallCycles := frontendStallCycles + 1.U
+    }
+    when(flushEvent){
+      controlHazardFlushCount := controlHazardFlushCount + 1.U
+    }
+    when(issueV.io.in.valid && issueV.io.in.bits.ctrl.mem && !issueV.io.in.ready){
+      lsuBackpressureCycles := lsuBackpressureCycles + 1.U
+    }
+    when(ibuffer.io.in.valid && !ibuffer.io.in.ready){
+      ibufferFullCycles := ibufferFullCycles + 1.U
+    }
+  }
+
+  io.perf_pipeline.foreach { perf =>
+    perf.activeCycles := activeCycles
+    perf.totalScalarIssued := totalScalarIssued
+    perf.totalVectorIssued := totalVectorIssued
+    perf.execStructuralHazardCyclesX := execStructuralHazardCyclesX
+    perf.execStructuralHazardCyclesV := execStructuralHazardCyclesV
+    perf.dataDepStallCycles := dataDepStallCycles
+    perf.controlHazardFlushCount := controlHazardFlushCount
+    perf.frontendStallCycles := frontendStallCycles
+    perf.lsuBackpressureCycles := lsuBackpressureCycles
+    perf.ibufferFullCycles := ibufferFullCycles
+  }
+
+  io.perf_inst_class.foreach { perf =>
+    perf.computeIssued := computeIssued
+    perf.memIssued := memIssued
+    perf.ctrlIssued := ctrlIssued
+  }
 
   issue_stall:=(~issueX.io.in.ready).asBool | (~issueV.io.in.ready).asBool//scoreb.io.delay | issue.io.in.ready
 }

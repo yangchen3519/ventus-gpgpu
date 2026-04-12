@@ -84,6 +84,7 @@ class GPGPU_SimTop extends Module {
   val io = IO(new Bundle {
     val host_req = Flipped(DecoupledIO(new host2CTA_data))
     val host_rsp = DecoupledIO(new CTA2host_data)
+    val perfDump = Input(Bool())
     val mem = new Mem_SimIO(DATA_BYTE_LEN, ADDR_WIDTH = parameters.MEM_ADDR_WIDTH)
     val cnt = Output(UInt(32.W))
     val icache_invalidate = Input(Bool())
@@ -95,6 +96,7 @@ class GPGPU_SimTop extends Module {
 
   io.host_req <> gpgpu.io.host_req
   io.host_rsp <> gpgpu.io.host_rsp
+  gpgpu.io.perfDump := io.perfDump
   io.cnt <> gpgpu.io.cnt
   //io.inst_cnt <> gpgpu.io.inst_cnt
 
@@ -118,4 +120,3 @@ object paramToJson extends App {
   import top.ParametersToJson
   ParametersToJson.saveToJson("sim-verilator/parameters.json")
 }
-

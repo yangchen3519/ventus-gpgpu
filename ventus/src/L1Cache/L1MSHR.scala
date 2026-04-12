@@ -114,6 +114,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
     //For InOrFlu
     val empty = Output(Bool())
     val full  = Output(Bool())
+    val usedEntries = Output(UInt((log2Up(NMshrEntry)+1).W))
     val probestatus = Output(Bool())
     val mshrStatus_st0 = Output(UInt(3.W))
     val stage2_ready = Input(Bool())
@@ -142,6 +143,7 @@ class MSHR(val bABits: Int, val tIWidth: Int, val WIdBits: Int, val NMshrEntry:I
   io.releasing_valid := io.missRspIn.valid
   io.releasing_blockAddr := blockAddr_Access(io.missRspIn.bits.instrId)
   io.empty := !entry_valid.orR
+  io.usedEntries := PopCount(entry_valid)
   io.probestatus := MSHR_st1.io.deq.valid//probestatus
   /*Structure Diagram
   * bA  : blockAddr

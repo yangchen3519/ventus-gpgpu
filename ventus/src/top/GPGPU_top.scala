@@ -163,6 +163,7 @@ class GPGPU_axi_top extends Module{
   gpgpu_top.io.host_req<>axi_lite_adapter.io.data
   gpgpu_top.io.host_rsp<>axi_lite_adapter.io.rsp
   gpgpu_top.io.cycle_cnt:=0.U
+  gpgpu_top.io.perfDump:=false.B
   gpgpu_top.io.icache_invalidate:=false.B
 }
 class GPGPU_axi_adapter_top extends Module{
@@ -188,6 +189,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     val inst_cnt = if(INST_CNT) Some(Output(Vec(NSms, UInt(32.W)))) else None
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(NSms, Vec(2, UInt(32.W))))) else None
     val cycle_cnt = Input(UInt(20.W))
+    val perfDump = Input(Bool())
     val asid_fill = if(MMU_ENABLED) Some(Input(Flipped(ValidIO(new mmu.AsidLookupEntry(SV.get))))) else None
     val icache_invalidate = Input(Bool())
   })
@@ -354,51 +356,103 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   def sumPerfCounter(select: DCachePerfCounters => UInt): UInt = {
     sm_wrapper.map(sm => select(sm.dcache_perf)).reduce(_ + _)
   }
+  def sumPipelinePerfCounter(select: PipelinePerfCounters => UInt): UInt = {
+    if (PMU_PIPELINE) sm_wrapper.map(sm => select(sm.pipeline_perf.get)).reduce(_ + _) else 0.U(64.W)
+  }
+  def sumInstClassPerfCounter(select: InstClassPerfCounters => UInt): UInt = {
+    if (PMU_INST_CLASS) sm_wrapper.map(sm => select(sm.inst_class_perf.get)).reduce(_ + _) else 0.U(64.W)
+  }
   def percentOf(numer: UInt, denom: UInt): UInt = {
     Mux(denom === 0.U, 0.U(32.W), ((numer * 100.U) / denom)(31, 0))
   }
 
   val l1dTotalReq = sumPerfCounter(_.totalReq)
-  val l1dReadHit = sumPerfCounter(_.readHit)
-  val l1dWriteHit = sumPerfCounter(_.writeHit)
+  val l1dReadReq = sumPerfCounter(_.readReq)
+  val l1dWriteReq = sumPerfCounter(_.writeReq)
   val l1dReadMiss = sumPerfCounter(_.readMiss)
   val l1dWriteMiss = sumPerfCounter(_.writeMiss)
+  val l1dReadPrimaryMiss = sumPerfCounter(_.readPrimaryMiss)
+  val l1dReadSecondaryMiss = sumPerfCounter(_.readSecondaryMiss)
+  val l1dReadPrimaryFullMiss = sumPerfCounter(_.readPrimaryFullMiss)
+  val l1dReadSecondaryFullMiss = sumPerfCounter(_.readSecondaryFullMiss)
+  val l1dWriteFreshMiss = sumPerfCounter(_.writeFreshMiss)
+  val l1dWriteInflightMiss = sumPerfCounter(_.writeInflightMiss)
   val l1dReplacement = sumPerfCounter(_.replacements)
   val l1dDirtyWriteback = sumPerfCounter(_.dirtyWritebacks)
-  val l1dTotalHit = l1dReadHit + l1dWriteHit
-  val l1dReadReq = l1dReadHit + l1dReadMiss
-  val l1dWriteReq = l1dWriteHit + l1dWriteMiss
+  val l1dMshrFullCycles = sumPerfCounter(_.mshrFullCycles)
+  val l1dRtabReplays = sumPerfCounter(_.rtabReplays)
+  val l1dBankConflictCycles = sumPerfCounter(_.bankConflictCycles)
+  val l1dTotalMiss = l1dReadMiss + l1dWriteMiss
+  val l1dTotalHit = l1dTotalReq - l1dTotalMiss
 
-  val pendingWgCount = RegInit(0.U(32.W))
-  val programActive = RegInit(false.B)
-  val hostReqFire = io.host_req.fire
-  val hostRspFire = io.host_rsp.fire
-  val pendingWgCountNext = WireInit(pendingWgCount)
-  when(hostReqFire && !hostRspFire){
-    pendingWgCountNext := pendingWgCount + 1.U
-  }.elsewhen(!hostReqFire && hostRspFire){
-    pendingWgCountNext := pendingWgCount - 1.U
+  val pmuActiveCycles = sumPipelinePerfCounter(_.activeCycles)
+  val pmuTotalScalarIssued = sumPipelinePerfCounter(_.totalScalarIssued)
+  val pmuTotalVectorIssued = sumPipelinePerfCounter(_.totalVectorIssued)
+  val pmuExecHazardX = sumPipelinePerfCounter(_.execStructuralHazardCyclesX)
+  val pmuExecHazardV = sumPipelinePerfCounter(_.execStructuralHazardCyclesV)
+  val pmuDataDepStall = sumPipelinePerfCounter(_.dataDepStallCycles)
+  val pmuCtrlFlushCnt = sumPipelinePerfCounter(_.controlHazardFlushCount)
+  val pmuFrontendStall = sumPipelinePerfCounter(_.frontendStallCycles)
+  val pmuLsuBackpressure = sumPipelinePerfCounter(_.lsuBackpressureCycles)
+  val pmuIbufferFullCycles = sumPipelinePerfCounter(_.ibufferFullCycles)
+
+  val pmuComputeIssued = sumInstClassPerfCounter(_.computeIssued)
+  val pmuMemIssued = sumInstClassPerfCounter(_.memIssued)
+  val pmuCtrlIssued = sumInstClassPerfCounter(_.ctrlIssued)
+  val pmuTotalIssued = pmuTotalScalarIssued + pmuTotalVectorIssued
+
+  val perfStarted = RegInit(false.B)
+  val perfPrinted = RegInit(false.B)
+  val kernelId = RegInit(0.U(32.W))
+  val perfStartPulse = io.host_req.fire && !perfStarted
+  val perfDumpPulse = io.perfDump && perfStarted && !perfPrinted
+  when(perfStartPulse){
+    perfStarted := true.B
+    perfPrinted := false.B
+  }.elsewhen(perfDumpPulse){
+    perfStarted := false.B
+    perfPrinted := true.B
+    kernelId := kernelId + 1.U
   }
-  pendingWgCount := pendingWgCountNext
-  when(hostReqFire){
-    programActive := true.B
+  sm_wrapper.foreach { sm =>
+    sm.perfEnable := perfStarted || perfStartPulse
+    sm.perfReset := perfStartPulse
   }
-  val programDonePulse =
-    programActive &&
-      (pendingWgCount =/= 0.U) &&
-      (pendingWgCountNext === 0.U) &&
-      !io.host_req.valid
-  when(programDonePulse){
-    programActive := false.B
-    printf(p"\n[L1D PERF] program finished\n")
-    printf(p"[L1D PERF] total requests      : ${l1dTotalReq}\n")
-    printf(p"[L1D PERF] hit rate            : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
-    printf(p"[L1D PERF] read hit rate       : ${percentOf(l1dReadHit, l1dReadReq)}% (${l1dReadHit}/${l1dReadReq})\n")
-    printf(p"[L1D PERF] write hit rate      : ${percentOf(l1dWriteHit, l1dWriteReq)}% (${l1dWriteHit}/${l1dWriteReq})\n")
-    printf(p"[L1D PERF] read miss rate      : ${percentOf(l1dReadMiss, l1dReadReq)}% (${l1dReadMiss}/${l1dReadReq})\n")
-    printf(p"[L1D PERF] write miss rate     : ${percentOf(l1dWriteMiss, l1dWriteReq)}% (${l1dWriteMiss}/${l1dWriteReq})\n")
-    printf(p"[L1D PERF] replacements        : ${l1dReplacement}\n")
-    printf(p"[L1D PERF] dirty writebacks    : ${l1dDirtyWriteback}\n")
+  when(perfDumpPulse){
+    printf(p"\n[KERNEL ${kernelId}] [L1D PERF] total summary\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] total requests      : ${l1dTotalReq}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] hit rate            : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] read primary miss   : ${l1dReadPrimaryMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] read secondary miss : ${l1dReadSecondaryMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] read pf miss        : ${l1dReadPrimaryFullMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] read sf miss        : ${l1dReadSecondaryFullMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] write fresh miss    : ${l1dWriteFreshMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] write inflight miss : ${l1dWriteInflightMiss}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] replacements        : ${l1dReplacement}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] dirty writebacks    : ${l1dDirtyWriteback}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] MSHR full cycles    : ${l1dMshrFullCycles}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] RTAB replays        : ${l1dRtabReplays}\n")
+    printf(p"[KERNEL ${kernelId}] [L1D PERF] bank conflict cyc   : ${l1dBankConflictCycles}\n")
+
+    if (PMU_PIPELINE) {
+      printf(p"[KERNEL ${kernelId}] [PIPELINE] active cycles       : ${pmuActiveCycles}\n")
+      printf(p"[KERNEL ${kernelId}] [PIPELINE] scalar issued       : ${pmuTotalScalarIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [PIPELINE] vector issued       : ${pmuTotalVectorIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [PIPELINE] total issued        : ${pmuTotalIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] exec hazard X          : ${pmuExecHazardX}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] exec hazard V          : ${pmuExecHazardV}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] data dependency        : ${pmuDataDepStall}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] control flush events   : ${pmuCtrlFlushCnt}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] frontend stall cycles  : ${pmuFrontendStall}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] lsu backpressure cyc   : ${pmuLsuBackpressure}\n")
+      printf(p"[KERNEL ${kernelId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
+    }
+    if (PMU_INST_CLASS) {
+      printf(p"[KERNEL ${kernelId}] [INST CLASS] compute issued    : ${pmuComputeIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
+      printf(p"[KERNEL ${kernelId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+    }
   }
 
   for(i <- 0 until NL2Cache){
@@ -425,7 +479,11 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
     val CTArsp=(Decoupled(new CTArspData))
     val memRsp = Flipped(DecoupledIO(new L1CacheMemRsp()(param)))
     val memReq = DecoupledIO(new L1CacheMemReq)
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
     val dcache_perf = Output(new DCachePerfCounters)
+    val pipeline_perf = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
+    val inst_class_perf = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
     val inst = if (SINGLE_INST) Some(Flipped(DecoupledIO(UInt(32.W)))) else None
     val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
     val l2tlbReq = if(MMU_ENABLED) Some(Vec(num_cache_in_sm, DecoupledIO(new Bundle{
@@ -445,9 +503,13 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   cta2warp.io.CTArsp<>io.CTArsp
   val pipe=Module(new pipe())
   pipe.sm_id := sm_id
+  pipe.io.perfEnable := io.perfEnable
+  pipe.io.perfReset := io.perfReset
   pipe.io.pc_reset:=true.B
   io.inst_cnt.foreach(_ := pipe.io.inst_cnt.getOrElse(0.U))
   io.inst_cnt2.foreach( _ := pipe.io.inst_cnt2.getOrElse(0.U))
+  io.pipeline_perf.foreach(_ := pipe.io.perf_pipeline.getOrElse(0.U.asTypeOf(new PipelinePerfCounters)))
+  io.inst_class_perf.foreach(_ := pipe.io.perf_inst_class.getOrElse(0.U.asTypeOf(new InstClassPerfCounters)))
   val cnt=Counter(10)
   when(cnt.value<5.U){cnt.inc()}
   when(cnt.value===5.U){pipe.io.pc_reset:=false.B}
@@ -525,6 +587,8 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   pipe.io.dcache_rsp.bits.activeMask:=dcache.io.coreRsp.bits.activeMask
   //pipe.io.dcache_rsp.bits.isWrite:=dcache.io.coreRsp.bits.isWrite
   dcache.io.coreRsp.ready:=pipe.io.dcache_rsp.ready
+  dcache.io.perfEnable := io.perfEnable
+  dcache.io.perfReset := io.perfReset
   io.dcache_perf := dcache.io.perf
 
   assert(num_cache_in_sm == 2, "Now only support 2 L1 Caches(one L1I and one L1D) in a single SM")
