@@ -24,6 +24,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef ENABLE_GVM
+#include "gvm.hpp"
+#endif // ENABLE_GVM
+
 constexpr uint64_t HALF_CYCLE_TIME = 5;
 
 //
@@ -196,6 +200,9 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
             sinks.push_back(console_sink);
         }
         logger = std::make_shared<spdlog::logger>("VentusRTLsim_logger", sinks.begin(), sinks.end());
+#ifdef ENABLE_GVM
+        gvm.logger = logger;
+#endif // ENABLE_GVM
         logger->set_level(get_log_level(config.log.level));
         logger->flush_on(spdlog::level::err);
 
@@ -462,6 +469,16 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
             std::exit(EXIT_FAILURE);
         }
     }
+
+#ifdef ENABLE_GVM
+    if (contextp->time() % 2 == 1) {
+        gvm.getDut();
+        if (gvm.gvmStep() != 0) {
+            sim_got_error = true;
+            logger->critical("GVM reported fatal mismatch, stopping simulation");
+        }
+    }
+#endif // ENABLE_GVM
 
     //
     // snapshot fork
