@@ -1,4 +1,5 @@
 #include "ventus_rtlsim_impl.hpp"
+#include "../../spike/gvmref/gvmref_interface.h"
 #include <ctime>
 
 static char verilator_rand_seed_setting[128] = "+verilator+seed+10086";
@@ -25,6 +26,8 @@ extern "C" void ventus_rtlsim_get_default_config(ventus_rtlsim_config_t* config)
     config->snapshot.time_interval = 100000;
     config->snapshot.num_max = 2;
     config->snapshot.filename = "logs/ventus_rtlsim.snapshot.fst";
+    config->verilator.argc = 0;
+    config->verilator.argv = nullptr;
 
     timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -83,3 +86,32 @@ extern "C" int ventus_rtlsim_get_parameter(const char* name, uint32_t* out_value
     *out_value = it->second;
     return 0;
 }
+#ifdef ENABLE_GVM
+extern "C" int fw_vt_dev_open() {
+    return gvmref_vt_dev_open();
+}
+extern "C" int fw_vt_dev_close() {
+    return gvmref_vt_dev_close();
+}
+extern "C" int fw_vt_buf_alloc(uint64_t size, uint64_t *vaddr, int BUF_TYPE, uint64_t taskID, uint64_t kernelID) {
+    return gvmref_vt_buf_alloc(size, vaddr, BUF_TYPE, taskID, kernelID);
+}
+extern "C" int fw_vt_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, uint64_t kernelID) {
+    return gvmref_vt_buf_free(size, vaddr, taskID, kernelID);
+}
+extern "C" int fw_vt_one_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, uint64_t kernelID) {
+    return gvmref_vt_one_buf_free(size, vaddr, taskID, kernelID);
+}
+extern "C" int fw_vt_copy_to_dev(uint64_t dev_vaddr,const void *src_addr, uint64_t size, uint64_t taskID, uint64_t kernelID) {
+    return gvmref_vt_copy_to_dev(dev_vaddr, src_addr, size, taskID, kernelID);
+}
+extern "C" int fw_vt_start(void* metaData, uint64_t taskID) {
+    return gvmref_vt_start(metaData, taskID);
+}
+extern "C" int fw_vt_kernel_finish() {
+    return gvmref_vt_kernel_finish();
+}
+extern "C" int fw_vt_upload_kernel_file(const char* filename, int taskID) {
+    return gvmref_vt_upload_kernel_file(filename, taskID);
+}
+#endif // ENABLE_GVM

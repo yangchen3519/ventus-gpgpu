@@ -24,6 +24,10 @@
 #include <utility>
 #include <vector>
 
+#ifdef ENABLE_GVM
+#include "gvm.hpp"
+#endif // ENABLE_GVM
+
 constexpr uint64_t HALF_CYCLE_TIME = 5;
 
 //
@@ -77,7 +81,13 @@ constexpr unsigned log2Ceil(unsigned n) {
 }
 
 // 核心流水线与L1D之间的接口 opcode & param
-inline constexpr unsigned L1D_NUM_SET = 256;       // L1 D-cache的组数
+// NOTE: 即使 nocache 版本物理上没有 L1D 硬件，SM↔mem 的接口仍是 cache-line 风格
+//       (tag/setIdx/blockOffset)，host 在 get_dcache_req 之后必须按 RTL 实际参数反推
+//       byte 地址。下面三个常量必须与 rtl_parameters.cpp 中 dcache_NSets / dcache_NWays /
+//       dcache_BlockWords 一致；早期版本误把 NUM_SET 写成 256（RTL 实际为 32），
+//       会让 (tag<<8)<<5<<2 在 uint32_t 内溢出，命中错误的物理地址（如目标 0x90004000
+//       会被算成 0x80020000），表现为读到全 0 → 跳转到 PC=0 → UNDEFINED INSTRUCTION。
+inline constexpr unsigned L1D_NUM_SET = 32;        // L1 D-cache的组数（= rtl_parameters.dcache_NSets）
 inline constexpr unsigned L1D_NUM_WAY = 2;         // L1 D-cache的组相联度
 inline constexpr unsigned L1D_BLOCK_NUM_WORD = 32; // 每个cache block包含多少个32bit
 inline constexpr uint8_t L1D_OPCODE_READ = 0x0;
@@ -196,6 +206,9 @@ void ventus_rtlsim_t::constructor(const ventus_rtlsim_config_t* config_) {
             sinks.push_back(console_sink);
         }
         logger = std::make_shared<spdlog::logger>("VentusRTLsim_logger", sinks.begin(), sinks.end());
+#ifdef ENABLE_GVM
+        gvm.logger = logger;
+#endif // ENABLE_GVM
         logger->set_level(get_log_level(config.log.level));
         logger->flush_on(spdlog::level::err);
 
@@ -462,6 +475,16 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
             std::exit(EXIT_FAILURE);
         }
     }
+
+#ifdef ENABLE_GVM
+    if (contextp->time() % 2 == 1) {
+        gvm.getDut();
+        if (gvm.gvmStep() != 0) {
+            sim_got_error = true;
+            logger->critical("GVM reported fatal mismatch, stopping simulation");
+        }
+    }
+#endif // ENABLE_GVM
 
     //
     // snapshot fork

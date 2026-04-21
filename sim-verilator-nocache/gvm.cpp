@@ -12,6 +12,7 @@
 #include "gvm_global_var.hpp"
 #include "gvm.hpp"
 #include "gvm_structs.hpp"
+#include "ventus_rtlsim.h"
 #include <bitset>
 #include <array>
 #include "gvm_macro.h"
@@ -29,6 +30,19 @@ uint64_t gvm_t::makeHwWarpKey(uint32_t sm_id, uint32_t hardware_warp_id) {
 
 uint64_t gvm_t::makeSmWgslotKey(uint32_t sm_id, uint32_t wg_slot_id) {
   return (static_cast<uint64_t>(sm_id) << 32) | wg_slot_id;
+}
+
+uint32_t gvm_t::getNumWgSlotPerSm() {
+  static uint32_t num_wg_slot_per_sm = 0;
+  if (num_wg_slot_per_sm != 0) {
+    return num_wg_slot_per_sm;
+  }
+
+  if (ventus_rtlsim_get_parameter("num_block", &num_wg_slot_per_sm) != 0 || num_wg_slot_per_sm == 0) {
+    logger->error("GVM INTERNAL error: failed to query RTL parameter num_block.");
+    assert(0);
+  }
+  return num_wg_slot_per_sm;
 }
 
 dut_active_warp_t* gvm_t::findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id) {
@@ -188,6 +202,8 @@ void gvm_t::getDutWarpNew() {
     dut_active_warps[key] = d;
     hw_warp_to_sw_warp[makeHwWarpKey(d.sm_id, d.hardware_warp_id)] = key;
     sm_wgslot_to_sw_wg[makeSmWgslotKey(d.sm_id, d.wg_slot_id_in_warp_sche)] = d.software_wg_id;
+    const uint32_t slot_linear = d.sm_id * getNumWgSlotPerSm() + d.wg_slot_id_in_warp_sche;
+    gvmref_bind_workgroup_slot(d.software_wg_id, slot_linear);
   }
 }
 

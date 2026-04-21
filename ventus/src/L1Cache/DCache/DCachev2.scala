@@ -253,7 +253,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // memReq_ready
 
   TagAccess.io.allocateWriteTagSRAMWValid_st1 := memRspPipe.io.dAmemRsp_wReq_valid
- TagAccess.io.allocateWriteData_st1 := get_tag(MshrAccess.io.missRspOut.bits.blockAddr)
+ TagAccess.io.allocateWriteData_st1 := get_tag(memRspPipe.io.dAmemRsp_wReq_blockAddr)
   // tag access
   //mshr
   MshrAccess.io.stage2_ready  := MemReqArb.io.in(1).ready

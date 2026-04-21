@@ -61,6 +61,7 @@ private:
   void resetRetireInfo();
   static uint64_t makeHwWarpKey(uint32_t sm_id, uint32_t hardware_warp_id);
   static uint64_t makeSmWgslotKey(uint32_t sm_id, uint32_t wg_slot_id);
+  uint32_t getNumWgSlotPerSm();
   dut_active_warp_t* findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id);
   const dut_active_warp_t* findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id) const;
   bool isInsnCareCached(

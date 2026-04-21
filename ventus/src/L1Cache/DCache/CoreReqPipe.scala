@@ -154,10 +154,17 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   Control.io.param  := io.CoreReq.bits.param
 
   val BlockAddr_st0 = Cat(io.CoreReq.bits.tag, io.CoreReq.bits.setIdx)
+  val BlockAddr_st1 = Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
   val refillSameBlock_st0 =
     io.refillWrite_valid &&
       (io.refillWrite_blockAddr === BlockAddr_st0) &&
       (if(MMU_ENABLED) (io.refillWrite_asid.get === io.CoreReq.bits.asid.get) else true.B)
+  val pendingReadMissSameBlock_st0 =
+    CoreReq_pipeReg_st0_st1.deq.valid &&
+      CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isRead &&
+      !io.tA_Hit_st1.hit &&
+      (BlockAddr_st0 === BlockAddr_st1) &&
+      (if(MMU_ENABLED) (io.CoreReq.bits.asid.get === CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get) else true.B)
 
   //output bits
   io.Probe_MSHR.blockAddr := BlockAddr_st0
@@ -177,29 +184,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val FlushInvstateReg_next = WireInit(FlushInvstateReg)
   val fluInvReq_st0 = io.CoreReq.valid && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)
   val fluInvStartOk_st0 = fluInvReq_st0 && io.MSHREmpty && io.SMSHREmpty
-  FlushInvstateReg_next := FlushInvstateReg
-  FlushInvstateReg := FlushInvstateReg_next
-  when(FlushInvstateReg === idle){
-    when(fluInvStartOk_st0 && !io.hasDirty && CoreReqControl_st0.isFluInvL2){
-      FlushInvstateReg_next := flushing
-  }.elsewhen(fluInvStartOk_st0 && !io.hasDirty){
-    FlushInvstateReg_next := responding
-  }
-  }.elsewhen(FlushInvstateReg === flushing){
-    when(io.memRspIsFlu){
-      FlushInvstateReg_next := responding
-    }
-  }.elsewhen(FlushInvstateReg === responding){
-    when(CoreReq_pipeReg_st0_st1.enq.ready && io.CoreReq.valid){
-      FlushInvstateReg_next := idle
-    }
-  }
-  val flushDirtyReq_st0 = fluInvStartOk_st0 && io.hasDirty && (FlushInvstateReg_next === idle)
+  val flushDirtyReq_st0 = fluInvStartOk_st0 && io.hasDirty && (FlushInvstateReg === idle)
   io.flushDirty_tA := flushDirtyReq_st0
   val FluInv_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush || CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
   val FluInvReq_st1_valid = CoreReq_pipeReg_st0_st1.deq.valid && FluInv_st1
   val FluInvIsPut_st1 = CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === idle) && FluInv_st1
   val FluInvIsFluL2_st1 =  CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === flushing) && FluInv_st1
+  val FluInvL2MemReqIssuedReg = RegInit(false.B)
+  val FluInvRspPendingReg = RegInit(false.B)
+  val FluInvRspReqReg = Reg(chiselTypeOf(CoreReq_pipeReg_st0_st1.deq.bits.Req))
+  val FluInvRspCtrlReg = Reg(chiselTypeOf(CoreReq_pipeReg_st0_st1.deq.bits.Ctrl))
 
   // valid ready
   // st0 st1 pipe reg enq valid
@@ -208,30 +202,29 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(!(io.RTABHit && !io.reqSource)){
     // probe SMSHR MSHR and tag
     when(CoreReqControl_st0.isRead || CoreReqControl_st0.isWrite|| CoreReqControl_st0.isAMO || CoreReqControl_st0.isLR || CoreReqControl_st0.isSC){
-      // refill 同拍写回同一 cacheline 时，禁止 st0 握手进入流水，避免 miss 与 refill 同拍导致 MSHR 卡死
-      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready && !refillSameBlock_st0
-      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready && !refillSameBlock_st0
+      // 避免 refill / 前一条 read miss 与当前同块请求在 st0 同拍推进，导致后续 MSHR 可见性错位
+      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0
+      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0
     }.elsewhen(CoreReqControl_st0.isWaitMSHR){
       //wait until MSHR empty
       st0_valid  := io.CoreReq.valid && io.MSHREmpty && io.SMSHREmpty
       st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.MSHREmpty && io.SMSHREmpty
     }.elsewhen(CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate){
-      
-        when(FlushInvstateReg_next === idle && FlushInvstateReg === idle){
-           when(!io.MSHREmpty || !io.SMSHREmpty){
-             st0_valid := false.B
-             st0_ready := false.B
-           }.elsewhen(io.hasDirty){
-             //write back dirty cacheline
-             st0_valid  := io.CoreReq.valid
-             st0_ready := false.B
-           }
-        }.elsewhen(FlushInvstateReg_next === flushing){
-          st0_valid := io.CoreReq.valid && (FlushInvstateReg === idle)
+        when(FlushInvstateReg === idle){
+          when(!io.MSHREmpty || !io.SMSHREmpty){
+            st0_valid := false.B
+            st0_ready := false.B
+          }.elsewhen(io.hasDirty){
+            //write back dirty cacheline
+            st0_valid  := io.CoreReq.valid
+            st0_ready := false.B
+          }.otherwise{
+            st0_valid := io.CoreReq.valid
+            st0_ready := CoreReq_pipeReg_st0_st1.enq.ready
+          }
+        }.otherwise{
+          st0_valid := false.B
           st0_ready := false.B
-        }.elsewhen(FlushInvstateReg_next === responding){
-          st0_valid := io.CoreReq.valid
-          st0_ready := CoreReq_pipeReg_st0_st1.enq.ready
         }
     }
   }.otherwise{
@@ -242,14 +235,58 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     st0_valid := false.B
     st0_ready := false.B
   }
-  io.invalidate_tA := (FlushInvstateReg === responding) && FluInvReq_st1_valid && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
+  io.invalidate_tA :=
+    (FlushInvstateReg === responding) && (
+      (FluInvRspPendingReg && FluInvRspCtrlReg.isInvalidate) ||
+        (FluInvReq_st1_valid && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate)
+    )
   io.st0_valid := st0_valid
   io.st0_ready := st0_ready
+
+  val fluInvCleanFire_st0 =
+    st0_valid && st0_ready && fluInvReq_st0 && !io.hasDirty
+  val fluInvL2MemReqFire_st1 =
+    FluInvIsFluL2_st1 && !FluInvL2MemReqIssuedReg && io.MissReq_Mem.ready
+  val fluInvRspPendingFire =
+    FluInvRspPendingReg && (FlushInvstateReg === responding) &&
+      CoreRsp_pipeReg_st1_st2.enq.ready && !io.memRsp_coreRsp.valid
+  val fluInvCoreRspFire =
+    fluInvRspPendingFire || (CoreReq_pipeReg_st0_st1.deq.fire && FluInv_st1 && (FlushInvstateReg === responding))
+  FlushInvstateReg_next := FlushInvstateReg
+  FlushInvstateReg := FlushInvstateReg_next
+  when(FlushInvstateReg === idle){
+    FluInvL2MemReqIssuedReg := false.B
+  }.elsewhen(fluInvL2MemReqFire_st1){
+    FluInvL2MemReqIssuedReg := true.B
+  }.elsewhen(FlushInvstateReg === responding && fluInvCoreRspFire){
+    FluInvL2MemReqIssuedReg := false.B
+  }
+  when(fluInvL2MemReqFire_st1){
+    FluInvRspPendingReg := true.B
+    FluInvRspReqReg := CoreReq_pipeReg_st0_st1.deq.bits.Req
+    FluInvRspCtrlReg := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
+  }.elsewhen(fluInvRspPendingFire){
+    FluInvRspPendingReg := false.B
+  }
+  when(FlushInvstateReg === idle){
+    when(fluInvCleanFire_st0 && CoreReqControl_st0.isFluInvL2){
+      FlushInvstateReg_next := flushing
+    }.elsewhen(fluInvCleanFire_st0){
+      FlushInvstateReg_next := responding
+    }
+  }.elsewhen(FlushInvstateReg === flushing){
+    when(io.memRspIsFlu && FluInvL2MemReqIssuedReg){
+      FlushInvstateReg_next := responding
+    }
+  }.elsewhen(FlushInvstateReg === responding){
+    when(fluInvCoreRspFire){
+      FlushInvstateReg_next := idle
+    }
+  }
 
   //st0_ready := io.Probe_tA_ready && CoreReq_pipeReg_st0_st1.enq.ready
   // =============
   // st1 pipe reg
-  val BlockAddr_st1 = Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
   val mshrReleasingSameBlock_st1 =
     io.mshrReleasing_valid &&
       (io.mshrReleasing_blockAddr === BlockAddr_st1) &&
@@ -396,7 +433,9 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   FluInvMemReq_st1.coreRspInstrId := DontCare
   FluInvMemReq_st1.activeMask := VecInit(Seq.fill(NLanes)(false.B))
   FluInvMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
-  FluInvMemReq_valid := (FluInvIsPut_st1 || FluInvIsFluL2_st1) && CoreReq_pipeReg_st0_st1.deq.valid
+  FluInvMemReq_valid :=
+    (FluInvIsPut_st1 || (FluInvIsFluL2_st1 && !FluInvL2MemReqIssuedReg)) &&
+      CoreReq_pipeReg_st0_st1.deq.valid
   FluInvMemReq_st1.spike_info.foreach(_ := DontCare )
   // evictMemReq_st1: uncached 请求如果命中 dirty cacheline，需要先把当前 cacheline 写回，
   // 再通过 RTAB / replay 机制重放原始 uncached 请求。
@@ -492,9 +531,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       st1_ready := io.MissReq_Mem.ready
     }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
       when(FlushInvstateReg === idle || FlushInvstateReg === flushing){
+        // After the L2 flush/invalidate memReq is accepted, we keep the response context
+        // in FluInvRspPendingReg instead of holding the request in TagAccess st1.
         st1_ready := io.MissReq_Mem.ready
       }.otherwise{
-        st1_ready := CoreRsp_pipeReg_st1_st2.enq.ready && !io.memRsp_coreRsp.valid
+        st1_ready := !FluInvRspPendingReg && CoreRsp_pipeReg_st1_st2.enq.ready && !io.memRsp_coreRsp.valid
       }
     }.otherwise{st1_ready := true.B}
   }.otherwise{// when requesting RTAB
@@ -542,7 +583,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     
   }.elsewhen(Control_st1.isFlush || Control_st1.isInvalidate){
-    st1_valid := CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === responding)
+    st1_valid := CoreReq_pipeReg_st0_st1.deq.valid && (FlushInvstateReg === responding) && !FluInvRspPendingReg
   }.otherwise{
     st1_valid := false.B
   }
@@ -610,6 +651,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotValid := false.B
     CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotData := DontCare
   // coreRsp 第 3 类：flush / invalidate 请求完成后返回给 core 的应答
+  }.elsewhen(fluInvRspPendingFire){
+    CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := FluInvRspCtrlReg.isWrite
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.data    := DontCare
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.instrId := FluInvRspReqReg.instrId
+    CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.activeMask := FluInvRspReqReg.perLaneAddr.map(_.activeMask)
+    CoreRsp_pipeReg_st1_st2.enq.bits.validFromCoreReq := true.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.perLaneAddr := FluInvRspReqReg.perLaneAddr
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotValid := false.B
+    CoreRsp_pipeReg_st1_st2.enq.bits.readHitSnapshotData := DontCare
   }.elsewhen(st1_valid && st1_ready && (FlushInvstateReg === responding)){
     CoreRsp_pipeReg_st1_st2.enq.valid            := true.B
     CoreRsp_pipeReg_st1_st2.enq.bits.Rsp.isWrite := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isWrite
@@ -628,6 +679,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // 由 core request 自身产生的响应，在同一个周期内会阻止 memRsp_coreRsp 占用 st2 的入队口。
   val coreRspPipeEnqFromCoreReq =
     (st1_valid && st1_ready && CacheHit_st1) ||
+      fluInvRspPendingFire ||
       (st1_valid && st1_ready && (FlushInvstateReg === responding))
   io.memRsp_coreRsp.ready := CoreRsp_pipeReg_st1_st2.enq.ready && !coreRspPipeEnqFromCoreReq
   coreReq_st2_ready := CoreRsp_st3.io.enq.ready && !io.memReq_coreRsp.valid

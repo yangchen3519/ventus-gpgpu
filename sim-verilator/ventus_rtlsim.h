@@ -174,6 +174,7 @@ DLL_PUBLIC int fw_vt_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, u
 DLL_PUBLIC int fw_vt_one_buf_free(uint64_t size, uint64_t *vaddr, uint64_t taskID, uint64_t kernelID);
 DLL_PUBLIC int fw_vt_copy_to_dev(uint64_t dev_vaddr,const void *src_addr, uint64_t size, uint64_t taskID, uint64_t kernelID);
 DLL_PUBLIC int fw_vt_start(void* metaData, uint64_t taskID);
+DLL_PUBLIC int fw_vt_kernel_finish();
 DLL_PUBLIC int fw_vt_upload_kernel_file(const char* filename, int taskID);
 #endif // ENABLE_GVM
 

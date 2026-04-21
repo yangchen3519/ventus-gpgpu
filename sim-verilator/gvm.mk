@@ -199,6 +199,7 @@ info-verilator:
 install: $(VLIB_TARGET)
 	install -d $(PREFIX)/lib
 	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/
+	install -m 644 $(VLIB_TARGET) $(PREFIX)/lib/lib$(VLIB_TARGET_NAME)-withcache.so
 	install -d $(PREFIX)/include
 	install -m 644 ventus_rtlsim.h $(PREFIX)/include/
 
