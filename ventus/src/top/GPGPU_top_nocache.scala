@@ -6,6 +6,7 @@ import L1Cache.MyConfig
 import L1Cache.ICache.{InstructionCache, ICacheMemReq_p, ICacheMemRsp, ICacheBundle}
 import pipeline.{CTAreqData, CTArspData, CTA2warp, pipe}
 import pipeline.{ICachePipeReq_np, ICachePipeRsp_np, DCacheCoreReq_np, DCacheCoreRsp_np}
+import pipeline.{InstClassPerfCounters, PipelinePerfCounters}
 import L1Cache.ShareMem.SharedMemory
 import chisel3.experimental.hierarchy.{Definition, Instance, instantiable, public, Instantiate}
 import config.config.Parameters
@@ -26,6 +27,10 @@ class SM_wrapper_nocache() extends Module {
     val icache = new SMIO_icache()(param)
     val dcache_req = DecoupledIO(new DCacheCoreReq_np)
     val dcache_rsp = Flipped(DecoupledIO(new DCacheCoreRsp_np))
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
+    val pipeline_perf = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
+    val inst_class_perf = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
     val icache_invalidate = Input(Bool())
   })
 
@@ -35,6 +40,10 @@ class SM_wrapper_nocache() extends Module {
 
   val pipe = Module(new pipe())
   pipe.sm_id := sm_id
+  pipe.io.perfEnable := io.perfEnable
+  pipe.io.perfReset := io.perfReset
+  io.pipeline_perf.foreach(_ := pipe.io.perf_pipeline.getOrElse(0.U.asTypeOf(new PipelinePerfCounters)))
+  io.inst_class_perf.foreach(_ := pipe.io.perf_inst_class.getOrElse(0.U.asTypeOf(new InstClassPerfCounters)))
 
   val cnt = Counter(10)
   when(cnt.value < 5.U) { cnt.inc() }
@@ -112,6 +121,7 @@ class GPGPU_top_nocache() extends Module {
     val icache = Vec(num_sm, new SMIO_icache()(param))
     val dcache_req = Vec(num_sm, DecoupledIO(new DCacheCoreReq_np))
     val dcache_rsp = Vec(num_sm, Flipped(DecoupledIO(new DCacheCoreRsp_np)))
+    val perfDump = Input(Bool())
     val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
@@ -122,16 +132,79 @@ class GPGPU_top_nocache() extends Module {
   cta.io.host2CTA :<>= io.host_req
   io.host_rsp :<>= cta.io.CTA2host
 
+  def sumPipelinePerfCounter(select: PipelinePerfCounters => UInt): UInt = {
+    if (PMU_PIPELINE) sm_wrapper.map(sm => select(sm.pipeline_perf.get)).reduce(_ + _) else 0.U(64.W)
+  }
+  def sumInstClassPerfCounter(select: InstClassPerfCounters => UInt): UInt = {
+    if (PMU_INST_CLASS) sm_wrapper.map(sm => select(sm.inst_class_perf.get)).reduce(_ + _) else 0.U(64.W)
+  }
+
+  val pmuActiveCycles = sumPipelinePerfCounter(_.activeCycles)
+  val pmuTotalScalarIssued = sumPipelinePerfCounter(_.totalScalarIssued)
+  val pmuTotalVectorIssued = sumPipelinePerfCounter(_.totalVectorIssued)
+  val pmuExecHazardX = sumPipelinePerfCounter(_.execStructuralHazardCyclesX)
+  val pmuExecHazardV = sumPipelinePerfCounter(_.execStructuralHazardCyclesV)
+  val pmuDataDepStall = sumPipelinePerfCounter(_.dataDepStallCycles)
+  val pmuBarrierStall = sumPipelinePerfCounter(_.barrierStallCycles)
+  val pmuCtrlFlushCnt = sumPipelinePerfCounter(_.controlHazardFlushCount)
+  val pmuFrontendStall = sumPipelinePerfCounter(_.frontendStallCycles)
+  val pmuLsuBackpressure = sumPipelinePerfCounter(_.lsuBackpressureCycles)
+  val pmuIbufferFullCycles = sumPipelinePerfCounter(_.ibufferFullCycles)
+  val pmuComputeIssued = sumInstClassPerfCounter(_.computeIssued)
+  val pmuMemIssued = sumInstClassPerfCounter(_.memIssued)
+  val pmuCtrlIssued = sumInstClassPerfCounter(_.ctrlIssued)
+  val pmuTotalIssued = pmuTotalScalarIssued + pmuTotalVectorIssued
+
+  val perfWindowStarted = RegInit(false.B)
+  val perfWindowPrinted = RegInit(false.B)
+  val programId = RegInit(0.U(32.W))
+  val perfStartPulse = io.host_req.fire && !perfWindowStarted
+  val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
+  when(perfStartPulse){
+    perfWindowStarted := true.B
+    perfWindowPrinted := false.B
+  }.elsewhen(perfDumpPulse){
+    perfWindowStarted := false.B
+    perfWindowPrinted := true.B
+    programId := programId + 1.U
+  }
+
   for (i <- 0 until num_sm) {
     sm_wrapper(i).CTAreq :<>= cta.io.CTA2warp(i)
     cta.io.warp2CTA(i) :<>= sm_wrapper(i).CTArsp
 
+    sm_wrapper(i).perfEnable := perfWindowStarted || perfStartPulse
+    sm_wrapper(i).perfReset := perfStartPulse
     io.icache(i).req :<>= sm_wrapper(i).icache.req
     sm_wrapper(i).icache.rsp :<>= io.icache(i).rsp
     sm_wrapper(i).icache_invalidate := io.icache_invalidate
 
     io.dcache_req(i) :<>= sm_wrapper(i).dcache_req
     sm_wrapper(i).dcache_rsp :<>= io.dcache_rsp(i)
+  }
+
+  when(perfDumpPulse){
+    printf(p"\n[PROGRAM ${programId}] [PMU] first-kernel-start -> last-kernel-end summary (nocache)\n")
+    if (PMU_PIPELINE) {
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] active cycles       : ${pmuActiveCycles}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] scalar issued       : ${pmuTotalScalarIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] vector issued       : ${pmuTotalVectorIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] total issued        : ${pmuTotalIssued}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X          : ${pmuExecHazardX}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V          : ${pmuExecHazardV}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] data dependency        : ${pmuDataDepStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] barrier stall cycles   : ${pmuBarrierStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] control flush events   : ${pmuCtrlFlushCnt}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] frontend stall cycles  : ${pmuFrontendStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure cyc   : ${pmuLsuBackpressure}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
+    }
+    if (PMU_INST_CLASS) {
+      printf(p"[PROGRAM ${programId}] [INST CLASS] compute issued    : ${pmuComputeIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+    }
   }
 
   import top.ParametersToJson

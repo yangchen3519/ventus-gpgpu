@@ -441,6 +441,7 @@ class pipe() extends Module{
   val execStructuralHazardCyclesX = RegInit(0.U(64.W))
   val execStructuralHazardCyclesV = RegInit(0.U(64.W))
   val dataDepStallCycles = RegInit(0.U(64.W))
+  val barrierStallCycles = RegInit(0.U(64.W))
   val controlHazardFlushCount = RegInit(0.U(64.W))
   val frontendStallCycles = RegInit(0.U(64.W))
   val lsuBackpressureCycles = RegInit(0.U(64.W))
@@ -457,10 +458,13 @@ class pipe() extends Module{
   val anyBufferedInst = VecInit(ibuffer.io.out.map(_.valid)).asUInt.orR
   val anySchedulableInst = VecInit((0 until num_warp).map(i => ibuffer.io.out(i).valid && warp_sche.io.warp_ready(i))).asUInt.orR
   val anyScoreExeBlockedInst = VecInit((0 until num_warp).map(i => ibuffer.io.out(i).valid && (scoreboardBusy(i) || warp_sche.io.exe_busy(i)))).asUInt.orR
+  val anyBarrierBlockedInst = VecInit((0 until num_warp).map(i => ibuffer.io.out(i).valid && warp_sche.io.barrier_busy(i))).asUInt.orR
   val noIssueFire = !issueX.io.in.fire && !issueV.io.in.fire
   val noIssueInput = !issueX.io.in.valid && !issueV.io.in.valid
   val dataDepStall = noIssueFire && noIssueInput && anyBufferedInst && !anySchedulableInst && anyScoreExeBlockedInst
-  val frontendStall = noIssueFire && noIssueInput && !dataDepStall
+  val barrierStall = noIssueFire && noIssueInput && anyBufferedInst && !anySchedulableInst &&
+    !anyScoreExeBlockedInst && anyBarrierBlockedInst
+  val frontendStall = noIssueFire && noIssueInput && !dataDepStall && !barrierStall
 
   val flushEvent = warp_sche.io.flush.valid && !RegNext(warp_sche.io.flush.valid, false.B)
 
@@ -471,6 +475,7 @@ class pipe() extends Module{
     execStructuralHazardCyclesX := 0.U
     execStructuralHazardCyclesV := 0.U
     dataDepStallCycles := 0.U
+    barrierStallCycles := 0.U
     controlHazardFlushCount := 0.U
     frontendStallCycles := 0.U
     lsuBackpressureCycles := 0.U
@@ -512,6 +517,9 @@ class pipe() extends Module{
     when(dataDepStall){
       dataDepStallCycles := dataDepStallCycles + 1.U
     }
+    when(barrierStall){
+      barrierStallCycles := barrierStallCycles + 1.U
+    }
     when(frontendStall){
       frontendStallCycles := frontendStallCycles + 1.U
     }
@@ -533,6 +541,7 @@ class pipe() extends Module{
     perf.execStructuralHazardCyclesX := execStructuralHazardCyclesX
     perf.execStructuralHazardCyclesV := execStructuralHazardCyclesV
     perf.dataDepStallCycles := dataDepStallCycles
+    perf.barrierStallCycles := barrierStallCycles
     perf.controlHazardFlushCount := controlHazardFlushCount
     perf.frontendStallCycles := frontendStallCycles
     perf.lsuBackpressureCycles := lsuBackpressureCycles

@@ -33,6 +33,7 @@ class warp_scheduler extends Module{
     val pc_ibuffer_ready=Input(Vec(num_warp,UInt(depth_ibuffer.W))) //ibuffer ready
     val asid =  if(MMU_ENABLED) Some(Output(UInt(KNL_ASID_WIDTH.W))) else None // 2ibuffer
     val warp_ready=Output(UInt(num_warp.W)) //to issue
+    val barrier_busy = Output(UInt(num_warp.W))
     val flush=(ValidIO(UInt(depth_warp.W)))
     val flushCache=(ValidIO(UInt(depth_warp.W)))
     val CTA2csr=ValidIO(new warpReqData) //redirect warpreq
@@ -180,6 +181,7 @@ class warp_scheduler extends Module{
   warp_active:=(warp_active | ((1.U<<io.warpReq.bits.wid).asUInt&Fill(num_warp,io.warpReq.fire))) & (~( Fill(num_warp,warp_end)&(1.U<<warp_end_id).asUInt )).asUInt
   val warp_ready=(~(warp_bar_data | io.scoreboard_busy | io.exe_busy | (~warp_active).asUInt)).asUInt
   io.warp_ready:=warp_ready
+  io.barrier_busy := warp_bar_data
   for (i<- num_warp-1 to 0 by -1){
     pc_ready(i):= io.pc_ibuffer_ready(i) & warp_active(i) 
     when(pc_ready(i)){next_warp:=i.asUInt}

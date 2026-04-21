@@ -301,6 +301,7 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
 
         // Thread-block return from GPU (stimuli)
         dut->io_host_rsp_ready = 1;
+        dut->io_perfDump = cta->is_idle();
 
         // Assert Verilated memory IO type: must be VlWide
         // static_assert(VlIsVlWide<std::decay<decltype(dut->io_mem_rd_data)>::type>::value, "Check io_mem type");

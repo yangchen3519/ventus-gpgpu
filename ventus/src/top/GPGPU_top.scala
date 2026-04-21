@@ -391,6 +391,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val pmuExecHazardX = sumPipelinePerfCounter(_.execStructuralHazardCyclesX)
   val pmuExecHazardV = sumPipelinePerfCounter(_.execStructuralHazardCyclesV)
   val pmuDataDepStall = sumPipelinePerfCounter(_.dataDepStallCycles)
+  val pmuBarrierStall = sumPipelinePerfCounter(_.barrierStallCycles)
   val pmuCtrlFlushCnt = sumPipelinePerfCounter(_.controlHazardFlushCount)
   val pmuFrontendStall = sumPipelinePerfCounter(_.frontendStallCycles)
   val pmuLsuBackpressure = sumPipelinePerfCounter(_.lsuBackpressureCycles)
@@ -401,58 +402,59 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val pmuCtrlIssued = sumInstClassPerfCounter(_.ctrlIssued)
   val pmuTotalIssued = pmuTotalScalarIssued + pmuTotalVectorIssued
 
-  val perfStarted = RegInit(false.B)
-  val perfPrinted = RegInit(false.B)
-  val kernelId = RegInit(0.U(32.W))
-  val perfStartPulse = io.host_req.fire && !perfStarted
-  val perfDumpPulse = io.perfDump && perfStarted && !perfPrinted
+  val perfWindowStarted = RegInit(false.B)
+  val perfWindowPrinted = RegInit(false.B)
+  val programId = RegInit(0.U(32.W))
+  val perfStartPulse = io.host_req.fire && !perfWindowStarted
+  val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
   when(perfStartPulse){
-    perfStarted := true.B
-    perfPrinted := false.B
+    perfWindowStarted := true.B
+    perfWindowPrinted := false.B
   }.elsewhen(perfDumpPulse){
-    perfStarted := false.B
-    perfPrinted := true.B
-    kernelId := kernelId + 1.U
+    perfWindowStarted := false.B
+    perfWindowPrinted := true.B
+    programId := programId + 1.U
   }
   sm_wrapper.foreach { sm =>
-    sm.perfEnable := perfStarted || perfStartPulse
+    sm.perfEnable := perfWindowStarted || perfStartPulse
     sm.perfReset := perfStartPulse
   }
   when(perfDumpPulse){
-    printf(p"\n[KERNEL ${kernelId}] [L1D PERF] total summary\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] total requests      : ${l1dTotalReq}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] hit rate            : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] read primary miss   : ${l1dReadPrimaryMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] read secondary miss : ${l1dReadSecondaryMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] read pf miss        : ${l1dReadPrimaryFullMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] read sf miss        : ${l1dReadSecondaryFullMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] write fresh miss    : ${l1dWriteFreshMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] write inflight miss : ${l1dWriteInflightMiss}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] replacements        : ${l1dReplacement}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] dirty writebacks    : ${l1dDirtyWriteback}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] MSHR full cycles    : ${l1dMshrFullCycles}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] RTAB replays        : ${l1dRtabReplays}\n")
-    printf(p"[KERNEL ${kernelId}] [L1D PERF] bank conflict cyc   : ${l1dBankConflictCycles}\n")
+    printf(p"\n[PROGRAM ${programId}] [PMU] first-kernel-start -> last-kernel-end summary\n")
 
     if (PMU_PIPELINE) {
-      printf(p"[KERNEL ${kernelId}] [PIPELINE] active cycles       : ${pmuActiveCycles}\n")
-      printf(p"[KERNEL ${kernelId}] [PIPELINE] scalar issued       : ${pmuTotalScalarIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [PIPELINE] vector issued       : ${pmuTotalVectorIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [PIPELINE] total issued        : ${pmuTotalIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] exec hazard X          : ${pmuExecHazardX}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] exec hazard V          : ${pmuExecHazardV}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] data dependency        : ${pmuDataDepStall}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] control flush events   : ${pmuCtrlFlushCnt}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] frontend stall cycles  : ${pmuFrontendStall}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] lsu backpressure cyc   : ${pmuLsuBackpressure}\n")
-      printf(p"[KERNEL ${kernelId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] active cycles       : ${pmuActiveCycles}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] scalar issued       : ${pmuTotalScalarIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] vector issued       : ${pmuTotalVectorIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] total issued        : ${pmuTotalIssued}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X          : ${pmuExecHazardX}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V          : ${pmuExecHazardV}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] data dependency        : ${pmuDataDepStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] barrier stall cycles   : ${pmuBarrierStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] control flush events   : ${pmuCtrlFlushCnt}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] frontend stall cycles  : ${pmuFrontendStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure cyc   : ${pmuLsuBackpressure}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
     }
     if (PMU_INST_CLASS) {
-      printf(p"[KERNEL ${kernelId}] [INST CLASS] compute issued    : ${pmuComputeIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
-      printf(p"[KERNEL ${kernelId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] compute issued    : ${pmuComputeIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
     }
+    printf(p"[PROGRAM ${programId}] [L1D PERF] total requests      : ${l1dTotalReq}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] hit rate            : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] read primary miss   : ${l1dReadPrimaryMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] read secondary miss : ${l1dReadSecondaryMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] read pf miss        : ${l1dReadPrimaryFullMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] read sf miss        : ${l1dReadSecondaryFullMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] write fresh miss    : ${l1dWriteFreshMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] write inflight miss : ${l1dWriteInflightMiss}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] replacements        : ${l1dReplacement}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] dirty writebacks    : ${l1dDirtyWriteback}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] MSHR full cycles    : ${l1dMshrFullCycles}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] RTAB replays        : ${l1dRtabReplays}\n")
+    printf(p"[PROGRAM ${programId}] [L1D PERF] bank conflict cyc   : ${l1dBankConflictCycles}\n")
   }
 
   for(i <- 0 until NL2Cache){
