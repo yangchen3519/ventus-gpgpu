@@ -117,6 +117,8 @@ DLL_PUBLIC ventus_rtlsim_t* ventus_rtlsim_init(const ventus_rtlsim_config_t* con
 //   it will rollback to the oldest snapshot to find out what happened.
 // You can force the rollback by passing `snapshot_rollback_forcing = true`
 DLL_PUBLIC void ventus_rtlsim_finish(ventus_rtlsim_t* sim, bool snapshot_rollback_forcing);
+// Ask RTL to print the accumulated testcase PMU summary once.
+DLL_PUBLIC void ventus_rtlsim_dump_testcase_pmu(ventus_rtlsim_t* sim);
 
 // Calculate 1 unit-time of simulation.
 // Return the result of this step: ok, error, time_exceed, or idle.

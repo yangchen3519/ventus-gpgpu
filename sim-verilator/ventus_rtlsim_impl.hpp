@@ -34,11 +34,13 @@ extern "C" struct ventus_rtlsim_t {
     gvm_t gvm;
 #endif // ENABLE_GVM
     bool need_icache_invalidate = false;
+    bool need_perf_dump_summary = false;
 
     void constructor(const ventus_rtlsim_config_t* config);
     void dut_reset() const;
     const ventus_rtlsim_step_result_t* step();
     void destructor(bool snapshot_rollback_forcing);
+    void dump_testcase_pmu_summary();
 
     void waveform_dump() const;
     void snapshot_fork();

@@ -122,6 +122,7 @@ class GPGPU_top_nocache() extends Module {
     val dcache_req = Vec(num_sm, DecoupledIO(new DCacheCoreReq_np))
     val dcache_rsp = Vec(num_sm, Flipped(DecoupledIO(new DCacheCoreRsp_np)))
     val perfDump = Input(Bool())
+    val perfDumpSummary = Input(Bool())
     val icache_invalidate = Input(Bool())
   })
   val cta = Module(new CTAinterface)
@@ -158,6 +159,21 @@ class GPGPU_top_nocache() extends Module {
   val perfWindowStarted = RegInit(false.B)
   val perfWindowPrinted = RegInit(false.B)
   val programId = RegInit(0.U(32.W))
+  val totalProgramWindows = RegInit(0.U(32.W))
+  val totalActiveCycles = RegInit(0.U(64.W))
+  val totalScalarIssued = RegInit(0.U(64.W))
+  val totalVectorIssued = RegInit(0.U(64.W))
+  val totalExecHazardX = RegInit(0.U(64.W))
+  val totalExecHazardV = RegInit(0.U(64.W))
+  val totalDataDepStall = RegInit(0.U(64.W))
+  val totalBarrierStall = RegInit(0.U(64.W))
+  val totalCtrlFlushCnt = RegInit(0.U(64.W))
+  val totalFrontendStall = RegInit(0.U(64.W))
+  val totalLsuBackpressure = RegInit(0.U(64.W))
+  val totalIbufferFullCycles = RegInit(0.U(64.W))
+  val totalComputeIssued = RegInit(0.U(64.W))
+  val totalMemIssued = RegInit(0.U(64.W))
+  val totalCtrlIssued = RegInit(0.U(64.W))
   val perfStartPulse = io.host_req.fire && !perfWindowStarted
   val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
   when(perfStartPulse){
@@ -167,6 +183,21 @@ class GPGPU_top_nocache() extends Module {
     perfWindowStarted := false.B
     perfWindowPrinted := true.B
     programId := programId + 1.U
+    totalProgramWindows := totalProgramWindows + 1.U
+    totalActiveCycles := totalActiveCycles + pmuActiveCycles
+    totalScalarIssued := totalScalarIssued + pmuTotalScalarIssued
+    totalVectorIssued := totalVectorIssued + pmuTotalVectorIssued
+    totalExecHazardX := totalExecHazardX + pmuExecHazardX
+    totalExecHazardV := totalExecHazardV + pmuExecHazardV
+    totalDataDepStall := totalDataDepStall + pmuDataDepStall
+    totalBarrierStall := totalBarrierStall + pmuBarrierStall
+    totalCtrlFlushCnt := totalCtrlFlushCnt + pmuCtrlFlushCnt
+    totalFrontendStall := totalFrontendStall + pmuFrontendStall
+    totalLsuBackpressure := totalLsuBackpressure + pmuLsuBackpressure
+    totalIbufferFullCycles := totalIbufferFullCycles + pmuIbufferFullCycles
+    totalComputeIssued := totalComputeIssued + pmuComputeIssued
+    totalMemIssued := totalMemIssued + pmuMemIssued
+    totalCtrlIssued := totalCtrlIssued + pmuCtrlIssued
   }
 
   for (i <- 0 until num_sm) {
@@ -182,6 +213,28 @@ class GPGPU_top_nocache() extends Module {
     io.dcache_req(i) :<>= sm_wrapper(i).dcache_req
     sm_wrapper(i).dcache_rsp :<>= io.dcache_rsp(i)
   }
+
+  def includeCurrentWindow(total: UInt, current: UInt): UInt = {
+    total + Mux(perfDumpPulse, current, 0.U(total.getWidth.W))
+  }
+
+  val summaryProgramWindows = includeCurrentWindow(totalProgramWindows, 1.U(32.W))
+  val summaryActiveCycles = includeCurrentWindow(totalActiveCycles, pmuActiveCycles)
+  val summaryScalarIssued = includeCurrentWindow(totalScalarIssued, pmuTotalScalarIssued)
+  val summaryVectorIssued = includeCurrentWindow(totalVectorIssued, pmuTotalVectorIssued)
+  val summaryExecHazardX = includeCurrentWindow(totalExecHazardX, pmuExecHazardX)
+  val summaryExecHazardV = includeCurrentWindow(totalExecHazardV, pmuExecHazardV)
+  val summaryDataDepStall = includeCurrentWindow(totalDataDepStall, pmuDataDepStall)
+  val summaryBarrierStall = includeCurrentWindow(totalBarrierStall, pmuBarrierStall)
+  val summaryCtrlFlushCnt = includeCurrentWindow(totalCtrlFlushCnt, pmuCtrlFlushCnt)
+  val summaryFrontendStall = includeCurrentWindow(totalFrontendStall, pmuFrontendStall)
+  val summaryLsuBackpressure = includeCurrentWindow(totalLsuBackpressure, pmuLsuBackpressure)
+  val summaryIbufferFullCycles = includeCurrentWindow(totalIbufferFullCycles, pmuIbufferFullCycles)
+  val summaryComputeIssued = includeCurrentWindow(totalComputeIssued, pmuComputeIssued)
+  val summaryMemIssued = includeCurrentWindow(totalMemIssued, pmuMemIssued)
+  val summaryCtrlIssued = includeCurrentWindow(totalCtrlIssued, pmuCtrlIssued)
+  val summaryTotalIssued = summaryScalarIssued + summaryVectorIssued
+  val summaryTotalClassIssued = summaryComputeIssued + summaryMemIssued + summaryCtrlIssued
 
   when(perfDumpPulse){
     printf(p"\n[PROGRAM ${programId}] [PMU] first-kernel-start -> last-kernel-end summary (nocache)\n")
@@ -204,6 +257,29 @@ class GPGPU_top_nocache() extends Module {
       printf(p"[PROGRAM ${programId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
       printf(p"[PROGRAM ${programId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
       printf(p"[PROGRAM ${programId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+    }
+  }
+  when((perfDumpPulse || io.perfDumpSummary) && summaryProgramWindows =/= 0.U){
+    printf(p"\n[TESTCASE TOTAL] [PMU] accumulated summary across ${summaryProgramWindows} program windows (nocache)\n")
+    if (PMU_PIPELINE) {
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] active cycles       : ${summaryActiveCycles}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] scalar issued       : ${summaryScalarIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] vector issued       : ${summaryVectorIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] total issued        : ${summaryTotalIssued}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X          : ${summaryExecHazardX}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V          : ${summaryExecHazardV}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] data dependency        : ${summaryDataDepStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] barrier stall cycles   : ${summaryBarrierStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] control flush events   : ${summaryCtrlFlushCnt}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] frontend stall cycles  : ${summaryFrontendStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure cyc   : ${summaryLsuBackpressure}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full cycles    : ${summaryIbufferFullCycles}\n")
+    }
+    if (PMU_INST_CLASS) {
+      printf(p"[TESTCASE TOTAL] [INST CLASS] compute issued    : ${summaryComputeIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] mem issued        : ${summaryMemIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] ctrl issued       : ${summaryCtrlIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] total class issued: ${summaryTotalClassIssued}\n")
     }
   }
 

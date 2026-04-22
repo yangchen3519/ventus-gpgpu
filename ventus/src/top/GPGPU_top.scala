@@ -164,6 +164,7 @@ class GPGPU_axi_top extends Module{
   gpgpu_top.io.host_rsp<>axi_lite_adapter.io.rsp
   gpgpu_top.io.cycle_cnt:=0.U
   gpgpu_top.io.perfDump:=false.B
+  gpgpu_top.io.perfDumpSummary:=false.B
   gpgpu_top.io.icache_invalidate:=false.B
 }
 class GPGPU_axi_adapter_top extends Module{
@@ -190,6 +191,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(NSms, Vec(2, UInt(32.W))))) else None
     val cycle_cnt = Input(UInt(20.W))
     val perfDump = Input(Bool())
+    val perfDumpSummary = Input(Bool())
     val asid_fill = if(MMU_ENABLED) Some(Input(Flipped(ValidIO(new mmu.AsidLookupEntry(SV.get))))) else None
     val icache_invalidate = Input(Bool())
   })
@@ -405,6 +407,34 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val perfWindowStarted = RegInit(false.B)
   val perfWindowPrinted = RegInit(false.B)
   val programId = RegInit(0.U(32.W))
+  val totalProgramWindows = RegInit(0.U(32.W))
+  val totalActiveCycles = RegInit(0.U(64.W))
+  val totalScalarIssued = RegInit(0.U(64.W))
+  val totalVectorIssued = RegInit(0.U(64.W))
+  val totalExecHazardX = RegInit(0.U(64.W))
+  val totalExecHazardV = RegInit(0.U(64.W))
+  val totalDataDepStall = RegInit(0.U(64.W))
+  val totalBarrierStall = RegInit(0.U(64.W))
+  val totalCtrlFlushCnt = RegInit(0.U(64.W))
+  val totalFrontendStall = RegInit(0.U(64.W))
+  val totalLsuBackpressure = RegInit(0.U(64.W))
+  val totalIbufferFullCycles = RegInit(0.U(64.W))
+  val totalComputeIssued = RegInit(0.U(64.W))
+  val totalMemIssued = RegInit(0.U(64.W))
+  val totalCtrlIssued = RegInit(0.U(64.W))
+  val totalL1dReq = RegInit(0.U(64.W))
+  val totalL1dHit = RegInit(0.U(64.W))
+  val totalL1dReadPrimaryMiss = RegInit(0.U(64.W))
+  val totalL1dReadSecondaryMiss = RegInit(0.U(64.W))
+  val totalL1dReadPrimaryFullMiss = RegInit(0.U(64.W))
+  val totalL1dReadSecondaryFullMiss = RegInit(0.U(64.W))
+  val totalL1dWriteFreshMiss = RegInit(0.U(64.W))
+  val totalL1dWriteInflightMiss = RegInit(0.U(64.W))
+  val totalL1dReplacement = RegInit(0.U(64.W))
+  val totalL1dDirtyWriteback = RegInit(0.U(64.W))
+  val totalL1dMshrFullCycles = RegInit(0.U(64.W))
+  val totalL1dRtabReplays = RegInit(0.U(64.W))
+  val totalL1dBankConflictCycles = RegInit(0.U(64.W))
   val perfStartPulse = io.host_req.fire && !perfWindowStarted
   val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
   when(perfStartPulse){
@@ -414,11 +444,75 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     perfWindowStarted := false.B
     perfWindowPrinted := true.B
     programId := programId + 1.U
+    totalProgramWindows := totalProgramWindows + 1.U
+    totalActiveCycles := totalActiveCycles + pmuActiveCycles
+    totalScalarIssued := totalScalarIssued + pmuTotalScalarIssued
+    totalVectorIssued := totalVectorIssued + pmuTotalVectorIssued
+    totalExecHazardX := totalExecHazardX + pmuExecHazardX
+    totalExecHazardV := totalExecHazardV + pmuExecHazardV
+    totalDataDepStall := totalDataDepStall + pmuDataDepStall
+    totalBarrierStall := totalBarrierStall + pmuBarrierStall
+    totalCtrlFlushCnt := totalCtrlFlushCnt + pmuCtrlFlushCnt
+    totalFrontendStall := totalFrontendStall + pmuFrontendStall
+    totalLsuBackpressure := totalLsuBackpressure + pmuLsuBackpressure
+    totalIbufferFullCycles := totalIbufferFullCycles + pmuIbufferFullCycles
+    totalComputeIssued := totalComputeIssued + pmuComputeIssued
+    totalMemIssued := totalMemIssued + pmuMemIssued
+    totalCtrlIssued := totalCtrlIssued + pmuCtrlIssued
+    totalL1dReq := totalL1dReq + l1dTotalReq
+    totalL1dHit := totalL1dHit + l1dTotalHit
+    totalL1dReadPrimaryMiss := totalL1dReadPrimaryMiss + l1dReadPrimaryMiss
+    totalL1dReadSecondaryMiss := totalL1dReadSecondaryMiss + l1dReadSecondaryMiss
+    totalL1dReadPrimaryFullMiss := totalL1dReadPrimaryFullMiss + l1dReadPrimaryFullMiss
+    totalL1dReadSecondaryFullMiss := totalL1dReadSecondaryFullMiss + l1dReadSecondaryFullMiss
+    totalL1dWriteFreshMiss := totalL1dWriteFreshMiss + l1dWriteFreshMiss
+    totalL1dWriteInflightMiss := totalL1dWriteInflightMiss + l1dWriteInflightMiss
+    totalL1dReplacement := totalL1dReplacement + l1dReplacement
+    totalL1dDirtyWriteback := totalL1dDirtyWriteback + l1dDirtyWriteback
+    totalL1dMshrFullCycles := totalL1dMshrFullCycles + l1dMshrFullCycles
+    totalL1dRtabReplays := totalL1dRtabReplays + l1dRtabReplays
+    totalL1dBankConflictCycles := totalL1dBankConflictCycles + l1dBankConflictCycles
   }
   sm_wrapper.foreach { sm =>
     sm.perfEnable := perfWindowStarted || perfStartPulse
     sm.perfReset := perfStartPulse
   }
+
+  def includeCurrentWindow(total: UInt, current: UInt): UInt = {
+    total + Mux(perfDumpPulse, current, 0.U(total.getWidth.W))
+  }
+
+  val summaryProgramWindows = includeCurrentWindow(totalProgramWindows, 1.U(32.W))
+  val summaryActiveCycles = includeCurrentWindow(totalActiveCycles, pmuActiveCycles)
+  val summaryScalarIssued = includeCurrentWindow(totalScalarIssued, pmuTotalScalarIssued)
+  val summaryVectorIssued = includeCurrentWindow(totalVectorIssued, pmuTotalVectorIssued)
+  val summaryExecHazardX = includeCurrentWindow(totalExecHazardX, pmuExecHazardX)
+  val summaryExecHazardV = includeCurrentWindow(totalExecHazardV, pmuExecHazardV)
+  val summaryDataDepStall = includeCurrentWindow(totalDataDepStall, pmuDataDepStall)
+  val summaryBarrierStall = includeCurrentWindow(totalBarrierStall, pmuBarrierStall)
+  val summaryCtrlFlushCnt = includeCurrentWindow(totalCtrlFlushCnt, pmuCtrlFlushCnt)
+  val summaryFrontendStall = includeCurrentWindow(totalFrontendStall, pmuFrontendStall)
+  val summaryLsuBackpressure = includeCurrentWindow(totalLsuBackpressure, pmuLsuBackpressure)
+  val summaryIbufferFullCycles = includeCurrentWindow(totalIbufferFullCycles, pmuIbufferFullCycles)
+  val summaryComputeIssued = includeCurrentWindow(totalComputeIssued, pmuComputeIssued)
+  val summaryMemIssued = includeCurrentWindow(totalMemIssued, pmuMemIssued)
+  val summaryCtrlIssued = includeCurrentWindow(totalCtrlIssued, pmuCtrlIssued)
+  val summaryL1dReq = includeCurrentWindow(totalL1dReq, l1dTotalReq)
+  val summaryL1dHit = includeCurrentWindow(totalL1dHit, l1dTotalHit)
+  val summaryL1dReadPrimaryMiss = includeCurrentWindow(totalL1dReadPrimaryMiss, l1dReadPrimaryMiss)
+  val summaryL1dReadSecondaryMiss = includeCurrentWindow(totalL1dReadSecondaryMiss, l1dReadSecondaryMiss)
+  val summaryL1dReadPrimaryFullMiss = includeCurrentWindow(totalL1dReadPrimaryFullMiss, l1dReadPrimaryFullMiss)
+  val summaryL1dReadSecondaryFullMiss = includeCurrentWindow(totalL1dReadSecondaryFullMiss, l1dReadSecondaryFullMiss)
+  val summaryL1dWriteFreshMiss = includeCurrentWindow(totalL1dWriteFreshMiss, l1dWriteFreshMiss)
+  val summaryL1dWriteInflightMiss = includeCurrentWindow(totalL1dWriteInflightMiss, l1dWriteInflightMiss)
+  val summaryL1dReplacement = includeCurrentWindow(totalL1dReplacement, l1dReplacement)
+  val summaryL1dDirtyWriteback = includeCurrentWindow(totalL1dDirtyWriteback, l1dDirtyWriteback)
+  val summaryL1dMshrFullCycles = includeCurrentWindow(totalL1dMshrFullCycles, l1dMshrFullCycles)
+  val summaryL1dRtabReplays = includeCurrentWindow(totalL1dRtabReplays, l1dRtabReplays)
+  val summaryL1dBankConflictCycles = includeCurrentWindow(totalL1dBankConflictCycles, l1dBankConflictCycles)
+  val summaryTotalIssued = summaryScalarIssued + summaryVectorIssued
+  val summaryTotalClassIssued = summaryComputeIssued + summaryMemIssued + summaryCtrlIssued
+
   when(perfDumpPulse){
     printf(p"\n[PROGRAM ${programId}] [PMU] first-kernel-start -> last-kernel-end summary\n")
 
@@ -455,6 +549,43 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     printf(p"[PROGRAM ${programId}] [L1D PERF] MSHR full cycles    : ${l1dMshrFullCycles}\n")
     printf(p"[PROGRAM ${programId}] [L1D PERF] RTAB replays        : ${l1dRtabReplays}\n")
     printf(p"[PROGRAM ${programId}] [L1D PERF] bank conflict cyc   : ${l1dBankConflictCycles}\n")
+  }
+  when((perfDumpPulse || io.perfDumpSummary) && summaryProgramWindows =/= 0.U){
+    printf(p"\n[TESTCASE TOTAL] [PMU] accumulated summary across ${summaryProgramWindows} program windows\n")
+
+    if (PMU_PIPELINE) {
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] active cycles       : ${summaryActiveCycles}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] scalar issued       : ${summaryScalarIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] vector issued       : ${summaryVectorIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] total issued        : ${summaryTotalIssued}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X          : ${summaryExecHazardX}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V          : ${summaryExecHazardV}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] data dependency        : ${summaryDataDepStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] barrier stall cycles   : ${summaryBarrierStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] control flush events   : ${summaryCtrlFlushCnt}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] frontend stall cycles  : ${summaryFrontendStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure cyc   : ${summaryLsuBackpressure}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full cycles    : ${summaryIbufferFullCycles}\n")
+    }
+    if (PMU_INST_CLASS) {
+      printf(p"[TESTCASE TOTAL] [INST CLASS] compute issued    : ${summaryComputeIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] mem issued        : ${summaryMemIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] ctrl issued       : ${summaryCtrlIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] total class issued: ${summaryTotalClassIssued}\n")
+    }
+    printf(p"[TESTCASE TOTAL] [L1D PERF] total requests      : ${summaryL1dReq}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] hit rate            : ${percentOf(summaryL1dHit, summaryL1dReq)}% (${summaryL1dHit}/${summaryL1dReq})\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] read primary miss   : ${summaryL1dReadPrimaryMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] read secondary miss : ${summaryL1dReadSecondaryMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] read pf miss        : ${summaryL1dReadPrimaryFullMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] read sf miss        : ${summaryL1dReadSecondaryFullMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] write fresh miss    : ${summaryL1dWriteFreshMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] write inflight miss : ${summaryL1dWriteInflightMiss}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] replacements        : ${summaryL1dReplacement}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] dirty writebacks    : ${summaryL1dDirtyWriteback}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] MSHR full cycles    : ${summaryL1dMshrFullCycles}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] RTAB replays        : ${summaryL1dRtabReplays}\n")
+    printf(p"[TESTCASE TOTAL] [L1D PERF] bank conflict cyc   : ${summaryL1dBankConflictCycles}\n")
   }
 
   for(i <- 0 until NL2Cache){

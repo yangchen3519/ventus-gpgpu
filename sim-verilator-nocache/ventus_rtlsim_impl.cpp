@@ -302,6 +302,7 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
         // Thread-block return from GPU (stimuli)
         dut->io_host_rsp_ready = 1;
         dut->io_perfDump = cta->is_idle();
+        dut->io_perfDumpSummary = need_perf_dump_summary;
 
         // Assert Verilated memory IO type: must be VlWide
         // static_assert(VlIsVlWide<std::decay<decltype(dut->io_mem_rd_data)>::type>::value, "Check io_mem type");
@@ -451,6 +452,9 @@ const ventus_rtlsim_step_result_t* ventus_rtlsim_t::step() {
     //
     dut->eval();
     waveform_dump();
+    if (dut->clock == 1 && need_perf_dump_summary) {
+        need_perf_dump_summary = false;
+    }
 
     //
     // Clock output
@@ -555,6 +559,17 @@ void ventus_rtlsim_t::destructor(bool snapshot_rollback_forcing) {
     delete contextp; // log system use this to get time
     contextp = nullptr;
     g_instances.erase(std::remove(g_instances.begin(), g_instances.end(), this), g_instances.end());
+}
+
+void ventus_rtlsim_t::dump_testcase_pmu_summary() {
+    if (!dut || !contextp) {
+        return;
+    }
+    need_perf_dump_summary = true;
+    for (int i = 0; i < 4 && need_perf_dump_summary; i++) {
+        step();
+    }
+    dut->io_perfDumpSummary = 0;
 }
 
 void ventus_rtlsim_t::snapshot_fork() {
@@ -674,6 +689,8 @@ void ventus_rtlsim_t::dut_reset() const {
     contextp->time(0);
     dut->io_host_req_valid = 0;
     dut->io_host_rsp_ready = 0;
+    dut->io_perfDump = 0;
+    dut->io_perfDumpSummary = 0;
     dut->reset = 1;
     dut->clock = 0;
     dut->eval();
