@@ -19,7 +19,7 @@ class DecoupledPipe[T <: Data](dat: T, latency: Int = 1, insulate: Boolean = fal
     val deq = DecoupledIO(dat)
   })
   val valids = io.enq.valid +: Seq.fill(latency)(RegInit(false.B))
-  io.enq.ready := RegNext(io.deq.ready)
+  io.enq.ready := RegNext(io.deq.ready, false.B)
   for (i <- 1 to latency) {
     when(!(!io.deq.ready && valids.drop(i).reduce(_ && _))) {
       valids(i) := valids(i - 1)
