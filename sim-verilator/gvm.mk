@@ -129,7 +129,7 @@ VLIB_VERILATOR_FLAGS += --assert
 VLIB_VERILATOR_FLAGS += --top-module $(VLIB_TOP_MODULE)
 
 ifeq ($(RELEASE),1)
-VLIB_CFLAGS += -O2 -fvisibility=hidden -DNDEBUG
+VLIB_CFLAGS += -O2 -fvisibility=hidden
 else
 VLIB_CFLAGS += -g -O0
 endif

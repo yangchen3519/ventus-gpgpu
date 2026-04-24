@@ -145,6 +145,7 @@ class warp_scheduler extends Module{
                     ((warp_bar_cur(end_wg_id) | (1.U<<end_wf_id).asUInt) === warp_bar_exp(end_wg_id))
         val gvm_bar_done = Module(new GvmDutBarrierDone)
         gvm_bar_done.io.clock := clock
+        gvm_bar_done.io.reset := reset.asBool
         gvm_bar_done.io.bar_done_fire := bar_fire_cond
         gvm_bar_done.io.sm_id := io.warp_control.bits.ctrl.spike_info.get.sm_id.pad(32)
         gvm_bar_done.io.wg_slot_id := end_wg_id

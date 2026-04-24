@@ -45,6 +45,56 @@ uint32_t gvm_t::getNumWgSlotPerSm() {
   return num_wg_slot_per_sm;
 }
 
+void gvm_t::bindWorkgroupSlotOrDie(uint32_t software_wg_id, uint32_t slot_linear) {
+  auto& binding = workgroup_runtime_bindings[software_wg_id];
+  if (binding.pds_slot_valid) {
+    if (binding.pds_slot_linear != slot_linear) {
+      setFatalMismatch(fmt::format(
+          "workgroup {} observed inconsistent PDS slot_linear: old={}, new={}",
+          software_wg_id,
+          binding.pds_slot_linear,
+          slot_linear
+      ));
+    }
+    return;
+  }
+
+  binding.pds_slot_valid = true;
+  binding.pds_slot_linear = slot_linear;
+  if (gvmref_bind_workgroup_slot(software_wg_id, slot_linear) != 0) {
+    setFatalMismatch(fmt::format(
+        "gvmref_bind_workgroup_slot failed for workgroup {}, slot_linear={}",
+        software_wg_id,
+        slot_linear
+    ));
+  }
+}
+
+void gvm_t::bindWorkgroupLdsBaseOrDie(uint32_t software_wg_id, uint32_t lds_base) {
+  auto& binding = workgroup_runtime_bindings[software_wg_id];
+  if (binding.lds_base_valid) {
+    if (binding.lds_base != lds_base) {
+      setFatalMismatch(fmt::format(
+          "workgroup {} observed inconsistent LDS base: old=0x{:08x}, new=0x{:08x}",
+          software_wg_id,
+          binding.lds_base,
+          lds_base
+      ));
+    }
+    return;
+  }
+
+  binding.lds_base_valid = true;
+  binding.lds_base = lds_base;
+  if (gvmref_bind_workgroup_lds_base(software_wg_id, lds_base) != 0) {
+    setFatalMismatch(fmt::format(
+        "gvmref_bind_workgroup_lds_base failed for workgroup {}, lds_base=0x{:08x}",
+        software_wg_id,
+        lds_base
+    ));
+  }
+}
+
 dut_active_warp_t* gvm_t::findWarpByHw(uint32_t sm_id, uint32_t hardware_warp_id) {
   auto it = hw_warp_to_sw_warp.find(makeHwWarpKey(sm_id, hardware_warp_id));
   if (it == hw_warp_to_sw_warp.end()) {
@@ -203,7 +253,8 @@ void gvm_t::getDutWarpNew() {
     hw_warp_to_sw_warp[makeHwWarpKey(d.sm_id, d.hardware_warp_id)] = key;
     sm_wgslot_to_sw_wg[makeSmWgslotKey(d.sm_id, d.wg_slot_id_in_warp_sche)] = d.software_wg_id;
     const uint32_t slot_linear = d.sm_id * getNumWgSlotPerSm() + d.wg_slot_id_in_warp_sche;
-    gvmref_bind_workgroup_slot(d.software_wg_id, slot_linear);
+    bindWorkgroupSlotOrDie(d.software_wg_id, slot_linear);
+    bindWorkgroupLdsBaseOrDie(d.software_wg_id, item.lds_base);
   }
 }
 

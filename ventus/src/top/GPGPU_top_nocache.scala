@@ -98,6 +98,7 @@ class SM_wrapper_nocache() extends Module {
     val WF_ID_WIDTH = log2Ceil(num_warp_in_a_block)
     val gvm_cta2warp = Module(new GvmDutCta2Warp)
     gvm_cta2warp.io.clock := clock
+    gvm_cta2warp.io.reset := reset.asBool
     gvm_cta2warp.io.warp_req_fire := cta2warp.io.warpReq.fire
     gvm_cta2warp.io.software_wg_id := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wg_id.pad(32)
     gvm_cta2warp.io.software_warp_id :=
@@ -108,6 +109,10 @@ class SM_wrapper_nocache() extends Module {
     gvm_cta2warp.io.vgpr_base := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_vgpr_base_dispatch.pad(32)
     gvm_cta2warp.io.wg_slot_id_in_warp_sche :=
       cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_tag_dispatch(TAG_WIDTH - 1, WF_ID_WIDTH)
+    gvm_cta2warp.io.lds_base := Cat(
+      LDS_BASE.U(32.W)(31, LDS_ID_WIDTH + 1),
+      cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_lds_base_dispatch
+    )
     gvm_cta2warp.io.rtl_num_thread := cta2warp.io.warpReq.bits.CTAdata.dispatch2cu_wf_size_dispatch.pad(32)
   }
 }

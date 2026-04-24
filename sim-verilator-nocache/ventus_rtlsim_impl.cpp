@@ -716,6 +716,9 @@ void ventus_rtlsim_t::dut_reset() const {
     dut->reset = 0;
     dut->eval();
     waveform_dump();
+#ifdef ENABLE_GVM
+    gvm_clear_global_trace_buffers();
+#endif // ENABLE_GVM
     logger->trace("Hardware reset ok");
 }
 

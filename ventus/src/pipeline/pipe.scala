@@ -65,6 +65,7 @@ class pipe() extends Module{
   if (GVM_ENABLED) {
     val gvm_xreg_init = Module(new GvmDutWarpXRegInit)
     gvm_xreg_init.io.clock := clock
+    gvm_xreg_init.io.reset := reset.asBool
     gvm_xreg_init.io.fire := io.warpReq.fire
     gvm_xreg_init.io.sm_id := sm_id
     gvm_xreg_init.io.hardware_warp_id := io.warpReq.bits.wid.pad(32)
