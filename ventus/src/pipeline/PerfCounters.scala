@@ -31,4 +31,21 @@ class InstClassPerfCounters extends Bundle {
   val computeIssued = UInt(64.W)
   val memIssued = UInt(64.W)
   val ctrlIssued = UInt(64.W)
+
+  val ctrlBranchIssued = UInt(64.W)
+  val ctrlBarrierIssued = UInt(64.W)
+  val ctrlCsrIssued = UInt(64.W)
+  val ctrlSimtStackIssued = UInt(64.W)
+  val ctrlFenceIssued = UInt(64.W)
+
+  val memLoadIssued = UInt(64.W)
+  val memStoreIssued = UInt(64.W)
+  val memAtomicIssued = UInt(64.W)
+
+  val computeSaluIssued = UInt(64.W)
+  val computeValuIssued = UInt(64.W)
+  val computeFpuIssued = UInt(64.W)
+  val computeMulIssued = UInt(64.W)
+  val computeSfuIssued = UInt(64.W)
+  val computeTensorCoreIssued = UInt(64.W)
 }

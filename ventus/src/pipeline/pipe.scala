@@ -451,9 +451,67 @@ class pipe() extends Module{
   val computeIssued = RegInit(0.U(64.W))
   val memIssued = RegInit(0.U(64.W))
   val ctrlIssued = RegInit(0.U(64.W))
+  val ctrlBranchIssued = RegInit(0.U(64.W))
+  val ctrlBarrierIssued = RegInit(0.U(64.W))
+  val ctrlCsrIssued = RegInit(0.U(64.W))
+  val ctrlSimtStackIssued = RegInit(0.U(64.W))
+  val ctrlFenceIssued = RegInit(0.U(64.W))
+  val memLoadIssued = RegInit(0.U(64.W))
+  val memStoreIssued = RegInit(0.U(64.W))
+  val memAtomicIssued = RegInit(0.U(64.W))
+  val computeSaluIssued = RegInit(0.U(64.W))
+  val computeValuIssued = RegInit(0.U(64.W))
+  val computeFpuIssued = RegInit(0.U(64.W))
+  val computeMulIssued = RegInit(0.U(64.W))
+  val computeSfuIssued = RegInit(0.U(64.W))
+  val computeTensorCoreIssued = RegInit(0.U(64.W))
 
-  def isCtrlInst(ctrl: CtrlSigs): Bool = {
-    ctrl.csr.orR || ctrl.barrier || ctrl.simt_stack || ctrl.branch.orR
+  def classifyIssuedInst(valid: Bool, ctrl: CtrlSigs): InstClassPerfCounters = {
+    val perf = WireInit(0.U.asTypeOf(new InstClassPerfCounters))
+    when(valid) {
+      when(ctrl.atomic) {
+        perf.memIssued := 1.U
+        perf.memAtomicIssued := 1.U
+      }.elsewhen(ctrl.mem) {
+        perf.memIssued := 1.U
+        when(ctrl.mem_cmd === IDecode.M_XRD) {
+          perf.memLoadIssued := 1.U
+        }.elsewhen(ctrl.mem_cmd === IDecode.M_XWR) {
+          perf.memStoreIssued := 1.U
+        }
+      }.elsewhen(ctrl.simt_stack_op) {
+        perf.ctrlIssued := 1.U
+        perf.ctrlSimtStackIssued := 1.U
+      }.elsewhen(ctrl.branch.orR) {
+        perf.ctrlIssued := 1.U
+        perf.ctrlBranchIssued := 1.U
+      }.elsewhen(ctrl.barrier) {
+        perf.ctrlIssued := 1.U
+        perf.ctrlBarrierIssued := 1.U
+      }.elsewhen(ctrl.csr.orR) {
+        perf.ctrlIssued := 1.U
+        perf.ctrlCsrIssued := 1.U
+      }.elsewhen(ctrl.fence) {
+        perf.ctrlIssued := 1.U
+        perf.ctrlFenceIssued := 1.U
+      }.otherwise {
+        perf.computeIssued := 1.U
+        when(ctrl.tc) {
+          perf.computeTensorCoreIssued := 1.U
+        }.elsewhen(ctrl.sfu) {
+          perf.computeSfuIssued := 1.U
+        }.elsewhen(ctrl.fp) {
+          perf.computeFpuIssued := 1.U
+        }.elsewhen(ctrl.mul) {
+          perf.computeMulIssued := 1.U
+        }.elsewhen(ctrl.isvec) {
+          perf.computeValuIssued := 1.U
+        }.otherwise {
+          perf.computeSaluIssued := 1.U
+        }
+      }
+    }
+    perf
   }
 
   val anyBufferedInst = VecInit(ibuffer.io.out.map(_.valid)).asUInt.orR
@@ -468,6 +526,8 @@ class pipe() extends Module{
   val frontendStall = noIssueFire && noIssueInput && !dataDepStall && !barrierStall
 
   val flushEvent = warp_sche.io.flush.valid && !RegNext(warp_sche.io.flush.valid, false.B)
+  val issueXClassInc = classifyIssuedInst(issueX.io.in.fire, issueX.io.in.bits.ctrl)
+  val issueVClassInc = classifyIssuedInst(issueV.io.in.fire, issueV.io.in.bits.ctrl)
 
   when(io.perfReset){
     activeCycles := 0.U
@@ -484,29 +544,46 @@ class pipe() extends Module{
     computeIssued := 0.U
     memIssued := 0.U
     ctrlIssued := 0.U
+    ctrlBranchIssued := 0.U
+    ctrlBarrierIssued := 0.U
+    ctrlCsrIssued := 0.U
+    ctrlSimtStackIssued := 0.U
+    ctrlFenceIssued := 0.U
+    memLoadIssued := 0.U
+    memStoreIssued := 0.U
+    memAtomicIssued := 0.U
+    computeSaluIssued := 0.U
+    computeValuIssued := 0.U
+    computeFpuIssued := 0.U
+    computeMulIssued := 0.U
+    computeSfuIssued := 0.U
+    computeTensorCoreIssued := 0.U
   }.elsewhen(io.perfEnable){
     activeCycles := activeCycles + 1.U
+    computeIssued := computeIssued + issueXClassInc.computeIssued + issueVClassInc.computeIssued
+    memIssued := memIssued + issueXClassInc.memIssued + issueVClassInc.memIssued
+    ctrlIssued := ctrlIssued + issueXClassInc.ctrlIssued + issueVClassInc.ctrlIssued
+    ctrlBranchIssued := ctrlBranchIssued + issueXClassInc.ctrlBranchIssued + issueVClassInc.ctrlBranchIssued
+    ctrlBarrierIssued := ctrlBarrierIssued + issueXClassInc.ctrlBarrierIssued + issueVClassInc.ctrlBarrierIssued
+    ctrlCsrIssued := ctrlCsrIssued + issueXClassInc.ctrlCsrIssued + issueVClassInc.ctrlCsrIssued
+    ctrlSimtStackIssued := ctrlSimtStackIssued + issueXClassInc.ctrlSimtStackIssued + issueVClassInc.ctrlSimtStackIssued
+    ctrlFenceIssued := ctrlFenceIssued + issueXClassInc.ctrlFenceIssued + issueVClassInc.ctrlFenceIssued
+    memLoadIssued := memLoadIssued + issueXClassInc.memLoadIssued + issueVClassInc.memLoadIssued
+    memStoreIssued := memStoreIssued + issueXClassInc.memStoreIssued + issueVClassInc.memStoreIssued
+    memAtomicIssued := memAtomicIssued + issueXClassInc.memAtomicIssued + issueVClassInc.memAtomicIssued
+    computeSaluIssued := computeSaluIssued + issueXClassInc.computeSaluIssued + issueVClassInc.computeSaluIssued
+    computeValuIssued := computeValuIssued + issueXClassInc.computeValuIssued + issueVClassInc.computeValuIssued
+    computeFpuIssued := computeFpuIssued + issueXClassInc.computeFpuIssued + issueVClassInc.computeFpuIssued
+    computeMulIssued := computeMulIssued + issueXClassInc.computeMulIssued + issueVClassInc.computeMulIssued
+    computeSfuIssued := computeSfuIssued + issueXClassInc.computeSfuIssued + issueVClassInc.computeSfuIssued
+    computeTensorCoreIssued := computeTensorCoreIssued + issueXClassInc.computeTensorCoreIssued + issueVClassInc.computeTensorCoreIssued
 
     when(issueX.io.in.fire){
       totalScalarIssued := totalScalarIssued + 1.U
-      when(issueX.io.in.bits.ctrl.mem){
-        memIssued := memIssued + 1.U
-      }.elsewhen(isCtrlInst(issueX.io.in.bits.ctrl)){
-        ctrlIssued := ctrlIssued + 1.U
-      }.otherwise{
-        computeIssued := computeIssued + 1.U
-      }
     }
 
     when(issueV.io.in.fire){
       totalVectorIssued := totalVectorIssued + 1.U
-      when(issueV.io.in.bits.ctrl.mem){
-        memIssued := memIssued + 1.U
-      }.elsewhen(isCtrlInst(issueV.io.in.bits.ctrl)){
-        ctrlIssued := ctrlIssued + 1.U
-      }.otherwise{
-        computeIssued := computeIssued + 1.U
-      }
     }
 
     when(issueX.io.in.valid && !issueX.io.in.ready){
@@ -553,7 +630,20 @@ class pipe() extends Module{
     perf.computeIssued := computeIssued
     perf.memIssued := memIssued
     perf.ctrlIssued := ctrlIssued
+    perf.ctrlBranchIssued := ctrlBranchIssued
+    perf.ctrlBarrierIssued := ctrlBarrierIssued
+    perf.ctrlCsrIssued := ctrlCsrIssued
+    perf.ctrlSimtStackIssued := ctrlSimtStackIssued
+    perf.ctrlFenceIssued := ctrlFenceIssued
+    perf.memLoadIssued := memLoadIssued
+    perf.memStoreIssued := memStoreIssued
+    perf.memAtomicIssued := memAtomicIssued
+    perf.computeSaluIssued := computeSaluIssued
+    perf.computeValuIssued := computeValuIssued
+    perf.computeFpuIssued := computeFpuIssued
+    perf.computeMulIssued := computeMulIssued
+    perf.computeSfuIssued := computeSfuIssued
+    perf.computeTensorCoreIssued := computeTensorCoreIssued
   }
-
   issue_stall:=(~issueX.io.in.ready).asBool | (~issueV.io.in.ready).asBool//scoreb.io.delay | issue.io.in.ready
 }

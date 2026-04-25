@@ -159,6 +159,20 @@ class GPGPU_top_nocache() extends Module {
   val pmuComputeIssued = sumInstClassPerfCounter(_.computeIssued)
   val pmuMemIssued = sumInstClassPerfCounter(_.memIssued)
   val pmuCtrlIssued = sumInstClassPerfCounter(_.ctrlIssued)
+  val pmuCtrlBranchIssued = sumInstClassPerfCounter(_.ctrlBranchIssued)
+  val pmuCtrlBarrierIssued = sumInstClassPerfCounter(_.ctrlBarrierIssued)
+  val pmuCtrlCsrIssued = sumInstClassPerfCounter(_.ctrlCsrIssued)
+  val pmuCtrlSimtStackIssued = sumInstClassPerfCounter(_.ctrlSimtStackIssued)
+  val pmuCtrlFenceIssued = sumInstClassPerfCounter(_.ctrlFenceIssued)
+  val pmuMemLoadIssued = sumInstClassPerfCounter(_.memLoadIssued)
+  val pmuMemStoreIssued = sumInstClassPerfCounter(_.memStoreIssued)
+  val pmuMemAtomicIssued = sumInstClassPerfCounter(_.memAtomicIssued)
+  val pmuComputeSaluIssued = sumInstClassPerfCounter(_.computeSaluIssued)
+  val pmuComputeValuIssued = sumInstClassPerfCounter(_.computeValuIssued)
+  val pmuComputeFpuIssued = sumInstClassPerfCounter(_.computeFpuIssued)
+  val pmuComputeMulIssued = sumInstClassPerfCounter(_.computeMulIssued)
+  val pmuComputeSfuIssued = sumInstClassPerfCounter(_.computeSfuIssued)
+  val pmuComputeTensorCoreIssued = sumInstClassPerfCounter(_.computeTensorCoreIssued)
   val pmuTotalIssued = pmuTotalScalarIssued + pmuTotalVectorIssued
 
   val perfWindowStarted = RegInit(false.B)
@@ -179,6 +193,20 @@ class GPGPU_top_nocache() extends Module {
   val totalComputeIssued = RegInit(0.U(64.W))
   val totalMemIssued = RegInit(0.U(64.W))
   val totalCtrlIssued = RegInit(0.U(64.W))
+  val totalCtrlBranchIssued = RegInit(0.U(64.W))
+  val totalCtrlBarrierIssued = RegInit(0.U(64.W))
+  val totalCtrlCsrIssued = RegInit(0.U(64.W))
+  val totalCtrlSimtStackIssued = RegInit(0.U(64.W))
+  val totalCtrlFenceIssued = RegInit(0.U(64.W))
+  val totalMemLoadIssued = RegInit(0.U(64.W))
+  val totalMemStoreIssued = RegInit(0.U(64.W))
+  val totalMemAtomicIssued = RegInit(0.U(64.W))
+  val totalComputeSaluIssued = RegInit(0.U(64.W))
+  val totalComputeValuIssued = RegInit(0.U(64.W))
+  val totalComputeFpuIssued = RegInit(0.U(64.W))
+  val totalComputeMulIssued = RegInit(0.U(64.W))
+  val totalComputeSfuIssued = RegInit(0.U(64.W))
+  val totalComputeTensorCoreIssued = RegInit(0.U(64.W))
   val perfStartPulse = io.host_req.fire && !perfWindowStarted
   val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
   when(perfStartPulse){
@@ -203,8 +231,21 @@ class GPGPU_top_nocache() extends Module {
     totalComputeIssued := totalComputeIssued + pmuComputeIssued
     totalMemIssued := totalMemIssued + pmuMemIssued
     totalCtrlIssued := totalCtrlIssued + pmuCtrlIssued
+    totalCtrlBranchIssued := totalCtrlBranchIssued + pmuCtrlBranchIssued
+    totalCtrlBarrierIssued := totalCtrlBarrierIssued + pmuCtrlBarrierIssued
+    totalCtrlCsrIssued := totalCtrlCsrIssued + pmuCtrlCsrIssued
+    totalCtrlSimtStackIssued := totalCtrlSimtStackIssued + pmuCtrlSimtStackIssued
+    totalCtrlFenceIssued := totalCtrlFenceIssued + pmuCtrlFenceIssued
+    totalMemLoadIssued := totalMemLoadIssued + pmuMemLoadIssued
+    totalMemStoreIssued := totalMemStoreIssued + pmuMemStoreIssued
+    totalMemAtomicIssued := totalMemAtomicIssued + pmuMemAtomicIssued
+    totalComputeSaluIssued := totalComputeSaluIssued + pmuComputeSaluIssued
+    totalComputeValuIssued := totalComputeValuIssued + pmuComputeValuIssued
+    totalComputeFpuIssued := totalComputeFpuIssued + pmuComputeFpuIssued
+    totalComputeMulIssued := totalComputeMulIssued + pmuComputeMulIssued
+    totalComputeSfuIssued := totalComputeSfuIssued + pmuComputeSfuIssued
+    totalComputeTensorCoreIssued := totalComputeTensorCoreIssued + pmuComputeTensorCoreIssued
   }
-
   for (i <- 0 until num_sm) {
     sm_wrapper(i).CTAreq :<>= cta.io.CTA2warp(i)
     cta.io.warp2CTA(i) :<>= sm_wrapper(i).CTArsp
@@ -238,6 +279,20 @@ class GPGPU_top_nocache() extends Module {
   val summaryComputeIssued = includeCurrentWindow(totalComputeIssued, pmuComputeIssued)
   val summaryMemIssued = includeCurrentWindow(totalMemIssued, pmuMemIssued)
   val summaryCtrlIssued = includeCurrentWindow(totalCtrlIssued, pmuCtrlIssued)
+  val summaryCtrlBranchIssued = includeCurrentWindow(totalCtrlBranchIssued, pmuCtrlBranchIssued)
+  val summaryCtrlBarrierIssued = includeCurrentWindow(totalCtrlBarrierIssued, pmuCtrlBarrierIssued)
+  val summaryCtrlCsrIssued = includeCurrentWindow(totalCtrlCsrIssued, pmuCtrlCsrIssued)
+  val summaryCtrlSimtStackIssued = includeCurrentWindow(totalCtrlSimtStackIssued, pmuCtrlSimtStackIssued)
+  val summaryCtrlFenceIssued = includeCurrentWindow(totalCtrlFenceIssued, pmuCtrlFenceIssued)
+  val summaryMemLoadIssued = includeCurrentWindow(totalMemLoadIssued, pmuMemLoadIssued)
+  val summaryMemStoreIssued = includeCurrentWindow(totalMemStoreIssued, pmuMemStoreIssued)
+  val summaryMemAtomicIssued = includeCurrentWindow(totalMemAtomicIssued, pmuMemAtomicIssued)
+  val summaryComputeSaluIssued = includeCurrentWindow(totalComputeSaluIssued, pmuComputeSaluIssued)
+  val summaryComputeValuIssued = includeCurrentWindow(totalComputeValuIssued, pmuComputeValuIssued)
+  val summaryComputeFpuIssued = includeCurrentWindow(totalComputeFpuIssued, pmuComputeFpuIssued)
+  val summaryComputeMulIssued = includeCurrentWindow(totalComputeMulIssued, pmuComputeMulIssued)
+  val summaryComputeSfuIssued = includeCurrentWindow(totalComputeSfuIssued, pmuComputeSfuIssued)
+  val summaryComputeTensorCoreIssued = includeCurrentWindow(totalComputeTensorCoreIssued, pmuComputeTensorCoreIssued)
   val summaryTotalIssued = summaryScalarIssued + summaryVectorIssued
   val summaryTotalClassIssued = summaryComputeIssued + summaryMemIssued + summaryCtrlIssued
 
@@ -258,10 +313,24 @@ class GPGPU_top_nocache() extends Module {
       printf(p"[PROGRAM ${programId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
     }
     if (PMU_INST_CLASS) {
-      printf(p"[PROGRAM ${programId}] [INST CLASS] compute issued    : ${pmuComputeIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] mem issued        : ${pmuMemIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] ctrl issued       : ${pmuCtrlIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] total class issued: ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] TOTAL CLASS ISSUED : ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] COMPUTE ISSUED     : ${pmuComputeIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - sALU           : ${pmuComputeSaluIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - vALU           : ${pmuComputeValuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - FPU            : ${pmuComputeFpuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - MUL            : ${pmuComputeMulIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - SFU            : ${pmuComputeSfuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - TensorCore     : ${pmuComputeTensorCoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] MEM ISSUED         : ${pmuMemIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - load           : ${pmuMemLoadIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - store          : ${pmuMemStoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - atomic         : ${pmuMemAtomicIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] CTRL ISSUED        : ${pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - branch         : ${pmuCtrlBranchIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - barrier        : ${pmuCtrlBarrierIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - csr            : ${pmuCtrlCsrIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - simt stack     : ${pmuCtrlSimtStackIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - fence          : ${pmuCtrlFenceIssued}\n")
     }
   }
   when((perfDumpPulse || io.perfDumpSummary) && summaryProgramWindows =/= 0.U){
@@ -281,10 +350,24 @@ class GPGPU_top_nocache() extends Module {
       printf(p"[TESTCASE TOTAL] [STALL] ibuffer full cycles    : ${summaryIbufferFullCycles}\n")
     }
     if (PMU_INST_CLASS) {
-      printf(p"[TESTCASE TOTAL] [INST CLASS] compute issued    : ${summaryComputeIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] mem issued        : ${summaryMemIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] ctrl issued       : ${summaryCtrlIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] total class issued: ${summaryTotalClassIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] TOTAL CLASS ISSUED : ${summaryTotalClassIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] COMPUTE ISSUED     : ${summaryComputeIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - sALU           : ${summaryComputeSaluIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - vALU           : ${summaryComputeValuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - FPU            : ${summaryComputeFpuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - MUL            : ${summaryComputeMulIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - SFU            : ${summaryComputeSfuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - TensorCore     : ${summaryComputeTensorCoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] MEM ISSUED         : ${summaryMemIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - load           : ${summaryMemLoadIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - store          : ${summaryMemStoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - atomic         : ${summaryMemAtomicIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] CTRL ISSUED        : ${summaryCtrlIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - branch         : ${summaryCtrlBranchIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - barrier        : ${summaryCtrlBarrierIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - csr            : ${summaryCtrlCsrIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - simt stack     : ${summaryCtrlSimtStackIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - fence          : ${summaryCtrlFenceIssued}\n")
     }
   }
 
