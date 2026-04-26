@@ -35,17 +35,22 @@ class DCachePerfCounters extends Bundle {
   val writeReq = UInt(64.W)
   val readMiss = UInt(64.W)
   val writeMiss = UInt(64.W)
-  val readPrimaryMiss = UInt(64.W)
-  val readSecondaryMiss = UInt(64.W)
-  val readPrimaryFullMiss = UInt(64.W)
-  val readSecondaryFullMiss = UInt(64.W)
-  val writeFreshMiss = UInt(64.W)
-  val writeInflightMiss = UInt(64.W)
+  val readAllocMshr = UInt(64.W)        // 读miss，首次分配primary MSHR entry
+  val readHitMshr = UInt(64.W)          // 读miss，命中已有在途miss，挂接到secondary entry
+  val readMshrEntryFull = UInt(64.W)    // 读miss，primary MSHR已满
+  val readMshrSubentryFull = UInt(64.W) // 读miss，命中在途块但secondary entry已满
+  val writeAllocMshr = UInt(64.W)       // 写miss，新分配MSHR entry
+  val writeHitWshr = UInt(64.W)         // 写miss，命中已有在途miss block
   val replacements = UInt(64.W)
   val dirtyWritebacks = UInt(64.W)
   val mshrFullCycles = UInt(64.W)
   val rtabReplays = UInt(64.W)
-  val bankConflictCycles = UInt(64.W)
+  // L1带宽和事务统计
+  val readBytes = UInt(64.W)            // L1读取的总字节数
+  val writeBytes = UInt(64.W)           // L1写入的总字节数
+  val readTransactions = UInt(64.W)     // L1读事务数
+  val writeTransactions = UInt(64.W)    // L1写事务数
+  val mshrBusyCycles = UInt(64.W)       // MSHR非空周期数（利用率）
 }
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
@@ -92,17 +97,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val writeReqCnt = RegInit(0.U(64.W))
   val readMissCnt = RegInit(0.U(64.W))
   val writeMissCnt = RegInit(0.U(64.W))
-  val readPrimaryMissCnt = RegInit(0.U(64.W))
-  val readSecondaryMissCnt = RegInit(0.U(64.W))
-  val readPrimaryFullMissCnt = RegInit(0.U(64.W))
-  val readSecondaryFullMissCnt = RegInit(0.U(64.W))
-  val writeFreshMissCnt = RegInit(0.U(64.W))
-  val writeInflightMissCnt = RegInit(0.U(64.W))
+  val readAllocMshrCnt = RegInit(0.U(64.W))
+  val readHitMshrCnt = RegInit(0.U(64.W))
+  val readMshrEntryFullCnt = RegInit(0.U(64.W))
+  val readMshrSubentryFullCnt = RegInit(0.U(64.W))
+  val writeAllocMshrCnt = RegInit(0.U(64.W))
+  val writeHitWshrCnt = RegInit(0.U(64.W))
   val replacementCnt = RegInit(0.U(64.W))
   val dirtyWritebackCnt = RegInit(0.U(64.W))
   val mshrFullCyclesCnt = RegInit(0.U(64.W))
   val rtabReplayCnt = RegInit(0.U(64.W))
-  val bankConflictCyclesCnt = RegInit(0.U(64.W))
+  val readBytesCnt = RegInit(0.U(64.W))
+  val writeBytesCnt = RegInit(0.U(64.W))
+  val readTransactionsCnt = RegInit(0.U(64.W))
+  val writeTransactionsCnt = RegInit(0.U(64.W))
+  val mshrBusyCyclesCnt = RegInit(0.U(64.W))
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
@@ -114,7 +123,6 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val DataAccessRRsp = DataAccesses.map(d => d.io.r.resp.data)
   val DataAccessReadSRAMRRsp = DataAccessRRsp.map(d => Cat(d.reverse))
   val replaceMemReqFire = Wire(Bool())
-  val perfBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
   val replaceReadResp = RegNext(memRspPipe.io.dAReplace_rReq_valid, false.B)
   val replaceDataValid = RegInit(false.B)
   val replaceDataReg = Reg(Vec(BlockWords, UInt(WordLength.W)))
@@ -127,8 +135,6 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   when(replaceMemReqFire){
     replaceDataValid := false.B
   }
-  perfBankEn.io.perLaneBlockIdx := coreReqPipe.io.perLaneAddr_st1.map(_.blockOffset)
-  perfBankEn.io.perLaneValid := coreReqPipe.io.perLaneAddr_st1.map(_.activeMask)
   // core request arbiter
   // source: RTAB top request / core request from io
   val blockCoreReq = memRspPipe.io.blockCoreReq
@@ -344,24 +350,32 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val perfWriteMissFire = perfWriteFire && !coreReqPipe.io.perfIsHit
   val perfMshrStatus = MshrAccess.io.probeOut_st1.probeStatus
   val perfWshrHit = WshrAccess.io.checkresult.Hit
-  val perfReadPrimaryMissFire =
+  // 带宽统计：计算active lanes数和字节数
+  val perfActiveLanes = PopCount(Cat(coreReqPipe.io.perLaneAddr_st1.map(_.activeMask)))
+  val perfBytesPerLane = BytesOfWord.U  // 4 bytes per lane (32-bit word)
+  val perfTransferBytes = perfActiveLanes * perfBytesPerLane
+  // 读miss分类：互斥分类，wshrHit优先级最高
+  val perfReadHitMshrFire =
+    perfReadMissFire &&
+      (perfWshrHit || (perfMshrStatus === MSHRStatus.SecondaryAvail))
+  val perfReadAllocMshrFire =
     perfReadMissFire &&
       !perfWshrHit &&
       (perfMshrStatus === MSHRStatus.PrimaryAvail)
-  val perfReadSecondaryMissFire =
+  val perfReadMshrEntryFullFire =
     perfReadMissFire &&
-      ((perfMshrStatus === MSHRStatus.SecondaryAvail) || perfWshrHit)
-  val perfReadPrimaryFullMissFire =
-    perfReadMissFire &&
+      !perfWshrHit &&
       (perfMshrStatus === MSHRStatus.PrimaryFull)
-  val perfReadSecondaryFullMissFire =
+  val perfReadMshrSubentryFullFire =
     perfReadMissFire &&
+      !perfWshrHit &&
       (perfMshrStatus === MSHRStatus.SecondaryFull)
-  val perfWriteFreshMissFire =
+  // 写miss分类：互斥分类
+  val perfWriteAllocMshrFire =
     perfWriteMissFire &&
       !perfWshrHit &&
       (perfMshrStatus === MSHRStatus.PrimaryAvail)
-  val perfWriteInflightMissFire =
+  val perfWriteHitWshrFire =
     perfWriteMissFire &&
       (perfWshrHit ||
         (perfMshrStatus === MSHRStatus.SecondaryAvail) ||
@@ -375,38 +389,40 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
       !coreReqPipe.io.CacheHit_st1 &&
       ((MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.PrimaryFull) ||
         (MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.SecondaryFull))
-  val perfDistinctBanks = PopCount(Cat(perfBankEn.io.perBankValid))
-  val perfActiveLanes = PopCount(Cat(coreReqPipe.io.perLaneAddr_st1.map(_.activeMask)))
-  val perfBankConflictFire =
-    perfCoreReqFire &&
-      coreReqPipe.io.perfIsHit &&
-      (perfActiveLanes > perfDistinctBanks)
   when(io.perfReset){
     totalReqCnt := 0.U
     readReqCnt := 0.U
     writeReqCnt := 0.U
     readMissCnt := 0.U
     writeMissCnt := 0.U
-    readPrimaryMissCnt := 0.U
-    readSecondaryMissCnt := 0.U
-    readPrimaryFullMissCnt := 0.U
-    readSecondaryFullMissCnt := 0.U
-    writeFreshMissCnt := 0.U
-    writeInflightMissCnt := 0.U
+    readAllocMshrCnt := 0.U
+    readHitMshrCnt := 0.U
+    readMshrEntryFullCnt := 0.U
+    readMshrSubentryFullCnt := 0.U
+    writeAllocMshrCnt := 0.U
+    writeHitWshrCnt := 0.U
     replacementCnt := 0.U
     dirtyWritebackCnt := 0.U
     mshrFullCyclesCnt := 0.U
     rtabReplayCnt := 0.U
-    bankConflictCyclesCnt := 0.U
-  }.otherwise{
+    readBytesCnt := 0.U
+    writeBytesCnt := 0.U
+    readTransactionsCnt := 0.U
+    writeTransactionsCnt := 0.U
+    mshrBusyCyclesCnt := 0.U
+  }.elsewhen(io.perfEnable){
     when(perfCoreReqFire){
       totalReqCnt := totalReqCnt + 1.U
     }
     when(perfReadFire){
       readReqCnt := readReqCnt + 1.U
+      readBytesCnt := readBytesCnt + perfTransferBytes
+      readTransactionsCnt := readTransactionsCnt + 1.U
     }
     when(perfWriteFire){
       writeReqCnt := writeReqCnt + 1.U
+      writeBytesCnt := writeBytesCnt + perfTransferBytes
+      writeTransactionsCnt := writeTransactionsCnt + 1.U
     }
     when(perfReadMissFire){
       readMissCnt := readMissCnt + 1.U
@@ -414,23 +430,23 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     when(perfWriteMissFire){
       writeMissCnt := writeMissCnt + 1.U
     }
-    when(perfReadPrimaryMissFire){
-      readPrimaryMissCnt := readPrimaryMissCnt + 1.U
+    when(perfReadAllocMshrFire){
+      readAllocMshrCnt := readAllocMshrCnt + 1.U
     }
-    when(perfReadSecondaryMissFire){
-      readSecondaryMissCnt := readSecondaryMissCnt + 1.U
+    when(perfReadHitMshrFire){
+      readHitMshrCnt := readHitMshrCnt + 1.U
     }
-    when(perfReadPrimaryFullMissFire){
-      readPrimaryFullMissCnt := readPrimaryFullMissCnt + 1.U
+    when(perfReadMshrEntryFullFire){
+      readMshrEntryFullCnt := readMshrEntryFullCnt + 1.U
     }
-    when(perfReadSecondaryFullMissFire){
-      readSecondaryFullMissCnt := readSecondaryFullMissCnt + 1.U
+    when(perfReadMshrSubentryFullFire){
+      readMshrSubentryFullCnt := readMshrSubentryFullCnt + 1.U
     }
-    when(perfWriteFreshMissFire){
-      writeFreshMissCnt := writeFreshMissCnt + 1.U
+    when(perfWriteAllocMshrFire){
+      writeAllocMshrCnt := writeAllocMshrCnt + 1.U
     }
-    when(perfWriteInflightMissFire){
-      writeInflightMissCnt := writeInflightMissCnt + 1.U
+    when(perfWriteHitWshrFire){
+      writeHitWshrCnt := writeHitWshrCnt + 1.U
     }
     when(TagAccess.io.replaceValidVictim_st1.get){
       replacementCnt := replacementCnt + 1.U
@@ -444,8 +460,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     when(ReplayTable.io.coreReq_replay.fire){
       rtabReplayCnt := rtabReplayCnt + 1.U
     }
-    when(perfBankConflictFire){
-      bankConflictCyclesCnt := bankConflictCyclesCnt + 1.U
+    when(!MshrAccess.io.empty){
+      mshrBusyCyclesCnt := mshrBusyCyclesCnt + 1.U
     }
   }
   MMU_ENABLED match{
@@ -555,17 +571,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   io.perf.writeReq := writeReqCnt
   io.perf.readMiss := readMissCnt
   io.perf.writeMiss := writeMissCnt
-  io.perf.readPrimaryMiss := readPrimaryMissCnt
-  io.perf.readSecondaryMiss := readSecondaryMissCnt
-  io.perf.readPrimaryFullMiss := readPrimaryFullMissCnt
-  io.perf.readSecondaryFullMiss := readSecondaryFullMissCnt
-  io.perf.writeFreshMiss := writeFreshMissCnt
-  io.perf.writeInflightMiss := writeInflightMissCnt
+  io.perf.readAllocMshr := readAllocMshrCnt
+  io.perf.readHitMshr := readHitMshrCnt
+  io.perf.readMshrEntryFull := readMshrEntryFullCnt
+  io.perf.readMshrSubentryFull := readMshrSubentryFullCnt
+  io.perf.writeAllocMshr := writeAllocMshrCnt
+  io.perf.writeHitWshr := writeHitWshrCnt
   io.perf.replacements := replacementCnt
   io.perf.dirtyWritebacks := dirtyWritebackCnt
   io.perf.mshrFullCycles := mshrFullCyclesCnt
   io.perf.rtabReplays := rtabReplayCnt
-  io.perf.bankConflictCycles := bankConflictCyclesCnt
+  io.perf.readBytes := readBytesCnt
+  io.perf.writeBytes := writeBytesCnt
+  io.perf.readTransactions := readTransactionsCnt
+  io.perf.writeTransactions := writeTransactionsCnt
+  io.perf.mshrBusyCycles := mshrBusyCyclesCnt
   // print 
   if(DCACHE_DEBUG){
     when(io.coreReq.fire){

@@ -48,4 +48,12 @@ class InstClassPerfCounters extends Bundle {
   val computeMulIssued = UInt(64.W)
   val computeSfuIssued = UInt(64.W)
   val computeTensorCoreIssued = UInt(64.W)
+
+  // 算力统计：实际操作数（考虑向量化）
+  val computeOps = UInt(64.W)           // 总计算操作数
+  val fpuOps = UInt(64.W)               // FPU操作数
+  val valuOps = UInt(64.W)              // vALU操作数
+  val saluOps = UInt(64.W)              // sALU操作数
+  val mulOps = UInt(64.W)               // MUL操作数
+  val sfuOps = UInt(64.W)               // SFU操作数
 }

@@ -260,8 +260,10 @@ class GPGPU_top_nocache() extends Module {
     sm_wrapper(i).dcache_rsp :<>= io.dcache_rsp(i)
   }
 
+  val summaryNeedsCurrentWindow = perfDumpPulse || (io.perfDumpSummary && perfWindowStarted && !perfWindowPrinted)
+
   def includeCurrentWindow(total: UInt, current: UInt): UInt = {
-    total + Mux(perfDumpPulse, current, 0.U(total.getWidth.W))
+    total + Mux(summaryNeedsCurrentWindow, current, 0.U(total.getWidth.W))
   }
 
   val summaryProgramWindows = includeCurrentWindow(totalProgramWindows, 1.U(32.W))

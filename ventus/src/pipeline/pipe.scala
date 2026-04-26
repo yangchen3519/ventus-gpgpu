@@ -465,9 +465,17 @@ class pipe() extends Module{
   val computeMulIssued = RegInit(0.U(64.W))
   val computeSfuIssued = RegInit(0.U(64.W))
   val computeTensorCoreIssued = RegInit(0.U(64.W))
+  // 算力统计：操作数
+  val computeOps = RegInit(0.U(64.W))
+  val fpuOps = RegInit(0.U(64.W))
+  val valuOps = RegInit(0.U(64.W))
+  val saluOps = RegInit(0.U(64.W))
+  val mulOps = RegInit(0.U(64.W))
+  val sfuOps = RegInit(0.U(64.W))
 
-  def classifyIssuedInst(valid: Bool, ctrl: CtrlSigs): InstClassPerfCounters = {
+  def classifyIssuedInst(valid: Bool, ctrl: CtrlSigs, mask: UInt, isVector: Bool): InstClassPerfCounters = {
     val perf = WireInit(0.U.asTypeOf(new InstClassPerfCounters))
+    val ops = Mux(isVector, PopCount(mask), 1.U)  // 向量指令统计active lanes，标量指令为1
     when(valid) {
       when(ctrl.atomic) {
         perf.memIssued := 1.U
@@ -496,18 +504,24 @@ class pipe() extends Module{
         perf.ctrlFenceIssued := 1.U
       }.otherwise {
         perf.computeIssued := 1.U
+        perf.computeOps := ops
         when(ctrl.tc) {
           perf.computeTensorCoreIssued := 1.U
         }.elsewhen(ctrl.sfu) {
           perf.computeSfuIssued := 1.U
+          perf.sfuOps := ops
         }.elsewhen(ctrl.fp) {
           perf.computeFpuIssued := 1.U
+          perf.fpuOps := ops
         }.elsewhen(ctrl.mul) {
           perf.computeMulIssued := 1.U
+          perf.mulOps := ops
         }.elsewhen(ctrl.isvec) {
           perf.computeValuIssued := 1.U
+          perf.valuOps := ops
         }.otherwise {
           perf.computeSaluIssued := 1.U
+          perf.saluOps := ops
         }
       }
     }
@@ -526,8 +540,8 @@ class pipe() extends Module{
   val frontendStall = noIssueFire && noIssueInput && !dataDepStall && !barrierStall
 
   val flushEvent = warp_sche.io.flush.valid && !RegNext(warp_sche.io.flush.valid, false.B)
-  val issueXClassInc = classifyIssuedInst(issueX.io.in.fire, issueX.io.in.bits.ctrl)
-  val issueVClassInc = classifyIssuedInst(issueV.io.in.fire, issueV.io.in.bits.ctrl)
+  val issueXClassInc = classifyIssuedInst(issueX.io.in.fire, issueX.io.in.bits.ctrl, 0.U, false.B)
+  val issueVClassInc = classifyIssuedInst(issueV.io.in.fire, issueV.io.in.bits.ctrl, issueV.io.in.bits.mask.asUInt, true.B)
 
   when(io.perfReset){
     activeCycles := 0.U
@@ -558,6 +572,12 @@ class pipe() extends Module{
     computeMulIssued := 0.U
     computeSfuIssued := 0.U
     computeTensorCoreIssued := 0.U
+    computeOps := 0.U
+    fpuOps := 0.U
+    valuOps := 0.U
+    saluOps := 0.U
+    mulOps := 0.U
+    sfuOps := 0.U
   }.elsewhen(io.perfEnable){
     activeCycles := activeCycles + 1.U
     computeIssued := computeIssued + issueXClassInc.computeIssued + issueVClassInc.computeIssued
@@ -577,6 +597,12 @@ class pipe() extends Module{
     computeMulIssued := computeMulIssued + issueXClassInc.computeMulIssued + issueVClassInc.computeMulIssued
     computeSfuIssued := computeSfuIssued + issueXClassInc.computeSfuIssued + issueVClassInc.computeSfuIssued
     computeTensorCoreIssued := computeTensorCoreIssued + issueXClassInc.computeTensorCoreIssued + issueVClassInc.computeTensorCoreIssued
+    computeOps := computeOps + issueXClassInc.computeOps + issueVClassInc.computeOps
+    fpuOps := fpuOps + issueXClassInc.fpuOps + issueVClassInc.fpuOps
+    valuOps := valuOps + issueXClassInc.valuOps + issueVClassInc.valuOps
+    saluOps := saluOps + issueXClassInc.saluOps + issueVClassInc.saluOps
+    mulOps := mulOps + issueXClassInc.mulOps + issueVClassInc.mulOps
+    sfuOps := sfuOps + issueXClassInc.sfuOps + issueVClassInc.sfuOps
 
     when(issueX.io.in.fire){
       totalScalarIssued := totalScalarIssued + 1.U
@@ -644,6 +670,12 @@ class pipe() extends Module{
     perf.computeMulIssued := computeMulIssued
     perf.computeSfuIssued := computeSfuIssued
     perf.computeTensorCoreIssued := computeTensorCoreIssued
+    perf.computeOps := computeOps
+    perf.fpuOps := fpuOps
+    perf.valuOps := valuOps
+    perf.saluOps := saluOps
+    perf.mulOps := mulOps
+    perf.sfuOps := sfuOps
   }
   issue_stall:=(~issueX.io.in.ready).asBool | (~issueV.io.in.ready).asBool//scoreb.io.delay | issue.io.in.ready
 }
