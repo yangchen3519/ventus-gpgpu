@@ -124,6 +124,9 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
     val flush_dcache = Flipped(DecoupledIO(Bool()))
     val to_dcache = DecoupledIO(new DCacheCoreReq_np)
     val to_shared = DecoupledIO(new ShareMemCoreReq_np)
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
+    val perf = Output(new LsuPerfCounters)
   })
   val s_idle :: s_save :: s_shared :: s_dcache ::s_dcache_1::s_dcache_2:: Nil = Enum(6)
   val cnt = new Counter(n = num_thread)
@@ -284,6 +287,25 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
  // io.to_dcache.bits.isWrite := reg_save.ctrl.mem_cmd(1)
   io.to_dcache.valid := (state===s_dcache) ||(state===s_dcache_1) ||(state===s_dcache_2)
   val mask_next = Wire(Vec(num_thread, Bool()))
+  val perfGlobalMemInstFire =
+    (state === s_save) &&
+      io.to_mshr.fire &&
+      reg_save.ctrl.mem_cmd.orR &&
+      !all_shared &&
+      !is_flush
+  val perfCoalescableInstFire = perfGlobalMemInstFire && !reg_save.ctrl.atomic
+  val perfAtomicInstFire = perfGlobalMemInstFire && reg_save.ctrl.atomic
+  val perfSegmentFire =
+    (state === s_dcache || state === s_dcache_1 || state === s_dcache_2) &&
+      io.to_dcache.fire &&
+      !reg_save.ctrl.atomic
+  val perfActiveThreads = PopCount(reg_save.mask.asUInt)
+  val perfSegmentThreads = PopCount(Cat(io.to_dcache.bits.perLaneAddr.map(_.activeMask)))
+  val globalMemCoalescableInsts = RegInit(0.U(64.W))
+  val globalMemAtomicInsts = RegInit(0.U(64.W))
+  val globalMemActiveThreads = RegInit(0.U(64.W))
+  val globalMemSegments = RegInit(0.U(64.W))
+  val globalMemSegmentThreads = RegInit(0.U(64.W))
 
   (0 until num_thread).foreach( x => {                          // update mask
     mask_next(x) := Mux(reg_save.ctrl.atomic ,reg_save.mask(x)&& !(x.asUInt===PriorityEncoder(reg_save.mask.asUInt)),reg_save.mask(x) && !(addr(x)(xLen-1, xLen-1-dcache_TagBits+1)===tag && addr(x)(xLen-1-dcache_TagBits, xLen-1-dcache_TagBits-dcache_SetIdxBits+1)===setIdx)
@@ -368,6 +390,32 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
       }.otherwise{state := s_dcache_2}
     }
   }
+
+  when(io.perfReset) {
+    globalMemCoalescableInsts := 0.U
+    globalMemAtomicInsts := 0.U
+    globalMemActiveThreads := 0.U
+    globalMemSegments := 0.U
+    globalMemSegmentThreads := 0.U
+  }.elsewhen(io.perfEnable) {
+    when(perfCoalescableInstFire) {
+      globalMemCoalescableInsts := globalMemCoalescableInsts + 1.U
+      globalMemActiveThreads := globalMemActiveThreads + perfActiveThreads
+    }
+    when(perfAtomicInstFire) {
+      globalMemAtomicInsts := globalMemAtomicInsts + 1.U
+    }
+    when(perfSegmentFire) {
+      globalMemSegments := globalMemSegments + 1.U
+      globalMemSegmentThreads := globalMemSegmentThreads + perfSegmentThreads
+    }
+  }
+
+  io.perf.globalMemCoalescableInsts := globalMemCoalescableInsts
+  io.perf.globalMemAtomicInsts := globalMemAtomicInsts
+  io.perf.globalMemActiveThreads := globalMemActiveThreads
+  io.perf.globalMemSegments := globalMemSegments
+  io.perf.globalMemSegmentThreads := globalMemSegmentThreads
   // FSM Operation
   switch(state){
     is (s_idle){
@@ -547,6 +595,9 @@ class LSUexe() extends Module{
     val csr_pds = Input(UInt(xLen.W))
     val csr_numw = Input(UInt(xLen.W))
     val csr_tid = Input(UInt(xLen.W))
+    val perfEnable = Input(Bool())
+    val perfReset = Input(Bool())
+    val perf = Output(new LsuPerfCounters)
   })
   val sharedmemory_addr_max = sharemem_size.U(32.W)
   //val sharedmemory = Module(new SharedMemoryV2(nSharedMemoryEntry, num_thread, xLen, lsu_nMshrEntry)) // default: 128
@@ -559,6 +610,9 @@ class LSUexe() extends Module{
   io.dcache_req <> AddrCalc.io.to_dcache
   io.shared_req <> AddrCalc.io.to_shared
   io.flush_dcache <> AddrCalc.io.flush_dcache
+  AddrCalc.io.perfEnable := io.perfEnable
+  AddrCalc.io.perfReset := io.perfReset
+  io.perf := AddrCalc.io.perf
 
   val rspArbiter = Module(new Arbiter(new DCacheCoreRsp_np, n = 2))
   rspArbiter.io.in(1) <> io.shared_rsp

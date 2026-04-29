@@ -6,7 +6,7 @@ import L1Cache.MyConfig
 import L1Cache.ICache.{InstructionCache, ICacheMemReq_p, ICacheMemRsp, ICacheBundle}
 import pipeline.{CTAreqData, CTArspData, CTA2warp, pipe}
 import pipeline.{ICachePipeReq_np, ICachePipeRsp_np, DCacheCoreReq_np, DCacheCoreRsp_np}
-import pipeline.{InstClassPerfCounters, PipelinePerfCounters}
+import pipeline.{InstClassPerfCounters, LsuPerfCounters, PipelinePerfCounters}
 import L1Cache.ShareMem.SharedMemory
 import chisel3.experimental.hierarchy.{Definition, Instance, instantiable, public, Instantiate}
 import config.config.Parameters
@@ -31,6 +31,7 @@ class SM_wrapper_nocache() extends Module {
     val perfReset = Input(Bool())
     val pipeline_perf = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
     val inst_class_perf = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
+    val lsu_perf = Output(new LsuPerfCounters)
     val icache_invalidate = Input(Bool())
   })
 
@@ -44,6 +45,7 @@ class SM_wrapper_nocache() extends Module {
   pipe.io.perfReset := io.perfReset
   io.pipeline_perf.foreach(_ := pipe.io.perf_pipeline.getOrElse(0.U.asTypeOf(new PipelinePerfCounters)))
   io.inst_class_perf.foreach(_ := pipe.io.perf_inst_class.getOrElse(0.U.asTypeOf(new InstClassPerfCounters)))
+  io.lsu_perf := pipe.io.perf_lsu
 
   val cnt = Counter(10)
   when(cnt.value < 5.U) { cnt.inc() }
@@ -301,75 +303,75 @@ class GPGPU_top_nocache() extends Module {
   when(perfDumpPulse){
     printf(p"\n[PROGRAM ${programId}] [PMU] first-kernel-start -> last-kernel-end summary (nocache)\n")
     if (PMU_PIPELINE) {
-      printf(p"[PROGRAM ${programId}] [INST+CYCLE] active cycles       : ${pmuActiveCycles}\n")
-      printf(p"[PROGRAM ${programId}] [INST+CYCLE] scalar issued       : ${pmuTotalScalarIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST+CYCLE] vector issued       : ${pmuTotalVectorIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST+CYCLE] total issued        : ${pmuTotalIssued}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X          : ${pmuExecHazardX}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V          : ${pmuExecHazardV}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] data dependency        : ${pmuDataDepStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] barrier stall cycles   : ${pmuBarrierStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] control flush events   : ${pmuCtrlFlushCnt}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] frontend stall cycles  : ${pmuFrontendStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure cyc   : ${pmuLsuBackpressure}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full cycles    : ${pmuIbufferFullCycles}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] active cycles (cycles): ${pmuActiveCycles}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] scalar issued (inst) : ${pmuTotalScalarIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] vector issued (inst) : ${pmuTotalVectorIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST+CYCLE] total issued (inst)  : ${pmuTotalIssued}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X (cycles): ${pmuExecHazardX}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V (cycles): ${pmuExecHazardV}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] data dependency (cycles): ${pmuDataDepStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] barrier stall (cycles): ${pmuBarrierStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] control flush (events): ${pmuCtrlFlushCnt}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] frontend stall (cycles): ${pmuFrontendStall}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure (cycles): ${pmuLsuBackpressure}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full (cycles): ${pmuIbufferFullCycles}\n")
     }
     if (PMU_INST_CLASS) {
-      printf(p"[PROGRAM ${programId}] [INST CLASS] TOTAL CLASS ISSUED : ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] COMPUTE ISSUED     : ${pmuComputeIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - sALU           : ${pmuComputeSaluIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - vALU           : ${pmuComputeValuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - FPU            : ${pmuComputeFpuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - MUL            : ${pmuComputeMulIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - SFU            : ${pmuComputeSfuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - TensorCore     : ${pmuComputeTensorCoreIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] MEM ISSUED         : ${pmuMemIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - load           : ${pmuMemLoadIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - store          : ${pmuMemStoreIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - atomic         : ${pmuMemAtomicIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS] CTRL ISSUED        : ${pmuCtrlIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - branch         : ${pmuCtrlBranchIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - barrier        : ${pmuCtrlBarrierIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - csr            : ${pmuCtrlCsrIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - simt stack     : ${pmuCtrlSimtStackIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST CLASS]   - fence          : ${pmuCtrlFenceIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] TOTAL CLASS ISSUED (inst): ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] COMPUTE ISSUED (inst) : ${pmuComputeIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - sALU (inst)      : ${pmuComputeSaluIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - vALU (inst)      : ${pmuComputeValuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - FPU (inst)       : ${pmuComputeFpuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - MUL (inst)       : ${pmuComputeMulIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - SFU (inst)       : ${pmuComputeSfuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - TensorCore (inst): ${pmuComputeTensorCoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] MEM ISSUED (inst)    : ${pmuMemIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - load (inst)      : ${pmuMemLoadIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - store (inst)     : ${pmuMemStoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - atomic (inst)    : ${pmuMemAtomicIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS] CTRL ISSUED (inst)   : ${pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - branch (inst)    : ${pmuCtrlBranchIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - barrier (inst)   : ${pmuCtrlBarrierIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - csr (inst)       : ${pmuCtrlCsrIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - simt stack (inst): ${pmuCtrlSimtStackIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST CLASS]   - fence (inst)     : ${pmuCtrlFenceIssued}\n")
     }
   }
   when((perfDumpPulse || io.perfDumpSummary) && summaryProgramWindows =/= 0.U){
     printf(p"\n[TESTCASE TOTAL] [PMU] accumulated summary across ${summaryProgramWindows} program windows (nocache)\n")
     if (PMU_PIPELINE) {
-      printf(p"[TESTCASE TOTAL] [INST+CYCLE] active cycles       : ${summaryActiveCycles}\n")
-      printf(p"[TESTCASE TOTAL] [INST+CYCLE] scalar issued       : ${summaryScalarIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST+CYCLE] vector issued       : ${summaryVectorIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST+CYCLE] total issued        : ${summaryTotalIssued}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X          : ${summaryExecHazardX}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V          : ${summaryExecHazardV}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] data dependency        : ${summaryDataDepStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] barrier stall cycles   : ${summaryBarrierStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] control flush events   : ${summaryCtrlFlushCnt}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] frontend stall cycles  : ${summaryFrontendStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure cyc   : ${summaryLsuBackpressure}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full cycles    : ${summaryIbufferFullCycles}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] active cycles (cycles): ${summaryActiveCycles}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] scalar issued (inst) : ${summaryScalarIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] vector issued (inst) : ${summaryVectorIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST+CYCLE] total issued (inst)  : ${summaryTotalIssued}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X (cycles): ${summaryExecHazardX}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V (cycles): ${summaryExecHazardV}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] data dependency (cycles): ${summaryDataDepStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] barrier stall (cycles): ${summaryBarrierStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] control flush (events): ${summaryCtrlFlushCnt}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] frontend stall (cycles): ${summaryFrontendStall}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure (cycles): ${summaryLsuBackpressure}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full (cycles): ${summaryIbufferFullCycles}\n")
     }
     if (PMU_INST_CLASS) {
-      printf(p"[TESTCASE TOTAL] [INST CLASS] TOTAL CLASS ISSUED : ${summaryTotalClassIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] COMPUTE ISSUED     : ${summaryComputeIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - sALU           : ${summaryComputeSaluIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - vALU           : ${summaryComputeValuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - FPU            : ${summaryComputeFpuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - MUL            : ${summaryComputeMulIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - SFU            : ${summaryComputeSfuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - TensorCore     : ${summaryComputeTensorCoreIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] MEM ISSUED         : ${summaryMemIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - load           : ${summaryMemLoadIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - store          : ${summaryMemStoreIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - atomic         : ${summaryMemAtomicIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS] CTRL ISSUED        : ${summaryCtrlIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - branch         : ${summaryCtrlBranchIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - barrier        : ${summaryCtrlBarrierIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - csr            : ${summaryCtrlCsrIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - simt stack     : ${summaryCtrlSimtStackIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST CLASS]   - fence          : ${summaryCtrlFenceIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] TOTAL CLASS ISSUED (inst): ${summaryTotalClassIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] COMPUTE ISSUED (inst) : ${summaryComputeIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - sALU (inst)      : ${summaryComputeSaluIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - vALU (inst)      : ${summaryComputeValuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - FPU (inst)       : ${summaryComputeFpuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - MUL (inst)       : ${summaryComputeMulIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - SFU (inst)       : ${summaryComputeSfuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - TensorCore (inst): ${summaryComputeTensorCoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] MEM ISSUED (inst)    : ${summaryMemIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - load (inst)      : ${summaryMemLoadIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - store (inst)     : ${summaryMemStoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - atomic (inst)    : ${summaryMemAtomicIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS] CTRL ISSUED (inst)   : ${summaryCtrlIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - branch (inst)    : ${summaryCtrlBranchIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - barrier (inst)   : ${summaryCtrlBarrierIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - csr (inst)       : ${summaryCtrlCsrIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - simt stack (inst): ${summaryCtrlSimtStackIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST CLASS]   - fence (inst)     : ${summaryCtrlFenceIssued}\n")
     }
   }
 

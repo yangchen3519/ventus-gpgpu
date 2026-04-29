@@ -51,6 +51,21 @@ class DCachePerfCounters extends Bundle {
   val readTransactions = UInt(64.W)     // L1读事务数
   val writeTransactions = UInt(64.W)    // L1写事务数
   val mshrBusyCycles = UInt(64.W)       // MSHR非空周期数（利用率）
+  val backpressureCycles = UInt(64.W)
+  val bpBlockedCoreReq = UInt(64.W)
+  val bpRtabFull = UInt(64.W)
+  val bpRtabAlmostFull = UInt(64.W)
+  val bpReplay = UInt(64.W)
+  val bpSt0TagProbeBusy = UInt(64.W)
+  val bpSt0RefillHazard = UInt(64.W)
+  val bpSt0PendingMissHazard = UInt(64.W)
+  val bpSt0PipeBusy = UInt(64.W)
+  val bpSt1HitBusy = UInt(64.W)
+  val bpSt1MissMshrBusy = UInt(64.W)
+  val bpSt1MissMemBusy = UInt(64.W)
+  val bpSt1MissRspBusy = UInt(64.W)
+  val bpSt1ReleaseHazard = UInt(64.W)
+  val bpOther = UInt(64.W)
 }
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
@@ -112,6 +127,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val readTransactionsCnt = RegInit(0.U(64.W))
   val writeTransactionsCnt = RegInit(0.U(64.W))
   val mshrBusyCyclesCnt = RegInit(0.U(64.W))
+  val backpressureCyclesCnt = RegInit(0.U(64.W))
+  val bpBlockedCoreReqCnt = RegInit(0.U(64.W))
+  val bpRtabFullCnt = RegInit(0.U(64.W))
+  val bpRtabAlmostFullCnt = RegInit(0.U(64.W))
+  val bpReplayCnt = RegInit(0.U(64.W))
+  val bpSt0TagProbeBusyCnt = RegInit(0.U(64.W))
+  val bpSt0RefillHazardCnt = RegInit(0.U(64.W))
+  val bpSt0PendingMissHazardCnt = RegInit(0.U(64.W))
+  val bpSt0PipeBusyCnt = RegInit(0.U(64.W))
+  val bpSt1HitBusyCnt = RegInit(0.U(64.W))
+  val bpSt1MissMshrBusyCnt = RegInit(0.U(64.W))
+  val bpSt1MissMemBusyCnt = RegInit(0.U(64.W))
+  val bpSt1MissRspBusyCnt = RegInit(0.U(64.W))
+  val bpSt1ReleaseHazardCnt = RegInit(0.U(64.W))
+  val bpOtherCnt = RegInit(0.U(64.W))
   for(i <- 0 until BlockWords){
     DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
     DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
@@ -389,6 +419,135 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
       !coreReqPipe.io.CacheHit_st1 &&
       ((MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.PrimaryFull) ||
         (MshrAccess.io.probeOut_st1.probeStatus === MSHRStatus.SecondaryFull))
+  val perfCoreReqBlocked = io.perfEnable && io.coreReq.valid && !io.coreReq.ready
+  val perfBpBlockedCoreReq = perfCoreReqBlocked && blockCoreReq
+  val perfBpRtabFull = perfCoreReqBlocked && !perfBpBlockedCoreReq && ReplayTable.io.RTAB_full
+  val perfBpRtabAlmostFull =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      ReplayTable.io.RTAB_almost_full &&
+      coreReqPipe.io.Req_st1_RTAB.valid
+  val perfBpReplay =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      ReplayTable.io.coreReq_replay.valid
+  val perfBpSt0TagProbeBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      coreReqPipe.io.bpSt0TagProbeBusy
+  val perfBpSt0RefillHazard =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      coreReqPipe.io.bpSt0RefillHazard
+  val perfBpSt0PendingMissHazard =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      coreReqPipe.io.bpSt0PendingMissHazard
+  val perfBpSt0PipeBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      coreReqPipe.io.bpSt0PipeBusy
+  val perfBpSt1ReleaseHazard =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      coreReqPipe.io.bpSt1ReleaseHazard
+  val perfBpSt1HitBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      !perfBpSt1ReleaseHazard &&
+      coreReqPipe.io.bpSt1HitBusy
+  val perfBpSt1MissRspBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      !perfBpSt1ReleaseHazard &&
+      !perfBpSt1HitBusy &&
+      coreReqPipe.io.bpSt1MissRspBusy
+  val perfBpSt1MissMshrBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      !perfBpSt1ReleaseHazard &&
+      !perfBpSt1HitBusy &&
+      !perfBpSt1MissRspBusy &&
+      coreReqPipe.io.bpSt1MissMshrBusy
+  val perfBpSt1MissMemBusy =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      !perfBpSt1ReleaseHazard &&
+      !perfBpSt1HitBusy &&
+      !perfBpSt1MissRspBusy &&
+      !perfBpSt1MissMshrBusy &&
+      coreReqPipe.io.bpSt1MissMemBusy
+  val perfBpOther =
+    perfCoreReqBlocked &&
+      !perfBpBlockedCoreReq &&
+      !perfBpRtabFull &&
+      !perfBpRtabAlmostFull &&
+      !perfBpReplay &&
+      !perfBpSt0TagProbeBusy &&
+      !perfBpSt0RefillHazard &&
+      !perfBpSt0PendingMissHazard &&
+      !perfBpSt0PipeBusy &&
+      !perfBpSt1ReleaseHazard &&
+      !perfBpSt1HitBusy &&
+      !perfBpSt1MissRspBusy &&
+      !perfBpSt1MissMshrBusy &&
+      !perfBpSt1MissMemBusy
   when(io.perfReset){
     totalReqCnt := 0.U
     readReqCnt := 0.U
@@ -410,6 +569,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     readTransactionsCnt := 0.U
     writeTransactionsCnt := 0.U
     mshrBusyCyclesCnt := 0.U
+    backpressureCyclesCnt := 0.U
+    bpBlockedCoreReqCnt := 0.U
+    bpRtabFullCnt := 0.U
+    bpRtabAlmostFullCnt := 0.U
+    bpReplayCnt := 0.U
+    bpSt0TagProbeBusyCnt := 0.U
+    bpSt0RefillHazardCnt := 0.U
+    bpSt0PendingMissHazardCnt := 0.U
+    bpSt0PipeBusyCnt := 0.U
+    bpSt1HitBusyCnt := 0.U
+    bpSt1MissMshrBusyCnt := 0.U
+    bpSt1MissMemBusyCnt := 0.U
+    bpSt1MissRspBusyCnt := 0.U
+    bpSt1ReleaseHazardCnt := 0.U
+    bpOtherCnt := 0.U
   }.elsewhen(io.perfEnable){
     when(perfCoreReqFire){
       totalReqCnt := totalReqCnt + 1.U
@@ -462,6 +636,51 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     }
     when(!MshrAccess.io.empty){
       mshrBusyCyclesCnt := mshrBusyCyclesCnt + 1.U
+    }
+    when(perfCoreReqBlocked){
+      backpressureCyclesCnt := backpressureCyclesCnt + 1.U
+    }
+    when(perfBpBlockedCoreReq){
+      bpBlockedCoreReqCnt := bpBlockedCoreReqCnt + 1.U
+    }
+    when(perfBpRtabFull){
+      bpRtabFullCnt := bpRtabFullCnt + 1.U
+    }
+    when(perfBpRtabAlmostFull){
+      bpRtabAlmostFullCnt := bpRtabAlmostFullCnt + 1.U
+    }
+    when(perfBpReplay){
+      bpReplayCnt := bpReplayCnt + 1.U
+    }
+    when(perfBpSt0TagProbeBusy){
+      bpSt0TagProbeBusyCnt := bpSt0TagProbeBusyCnt + 1.U
+    }
+    when(perfBpSt0RefillHazard){
+      bpSt0RefillHazardCnt := bpSt0RefillHazardCnt + 1.U
+    }
+    when(perfBpSt0PendingMissHazard){
+      bpSt0PendingMissHazardCnt := bpSt0PendingMissHazardCnt + 1.U
+    }
+    when(perfBpSt0PipeBusy){
+      bpSt0PipeBusyCnt := bpSt0PipeBusyCnt + 1.U
+    }
+    when(perfBpSt1HitBusy){
+      bpSt1HitBusyCnt := bpSt1HitBusyCnt + 1.U
+    }
+    when(perfBpSt1MissMshrBusy){
+      bpSt1MissMshrBusyCnt := bpSt1MissMshrBusyCnt + 1.U
+    }
+    when(perfBpSt1MissMemBusy){
+      bpSt1MissMemBusyCnt := bpSt1MissMemBusyCnt + 1.U
+    }
+    when(perfBpSt1MissRspBusy){
+      bpSt1MissRspBusyCnt := bpSt1MissRspBusyCnt + 1.U
+    }
+    when(perfBpSt1ReleaseHazard){
+      bpSt1ReleaseHazardCnt := bpSt1ReleaseHazardCnt + 1.U
+    }
+    when(perfBpOther){
+      bpOtherCnt := bpOtherCnt + 1.U
     }
   }
   MMU_ENABLED match{
@@ -586,6 +805,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   io.perf.readTransactions := readTransactionsCnt
   io.perf.writeTransactions := writeTransactionsCnt
   io.perf.mshrBusyCycles := mshrBusyCyclesCnt
+  io.perf.backpressureCycles := backpressureCyclesCnt
+  io.perf.bpBlockedCoreReq := bpBlockedCoreReqCnt
+  io.perf.bpRtabFull := bpRtabFullCnt
+  io.perf.bpRtabAlmostFull := bpRtabAlmostFullCnt
+  io.perf.bpReplay := bpReplayCnt
+  io.perf.bpSt0TagProbeBusy := bpSt0TagProbeBusyCnt
+  io.perf.bpSt0RefillHazard := bpSt0RefillHazardCnt
+  io.perf.bpSt0PendingMissHazard := bpSt0PendingMissHazardCnt
+  io.perf.bpSt0PipeBusy := bpSt0PipeBusyCnt
+  io.perf.bpSt1HitBusy := bpSt1HitBusyCnt
+  io.perf.bpSt1MissMshrBusy := bpSt1MissMshrBusyCnt
+  io.perf.bpSt1MissMemBusy := bpSt1MissMemBusyCnt
+  io.perf.bpSt1MissRspBusy := bpSt1MissRspBusyCnt
+  io.perf.bpSt1ReleaseHazard := bpSt1ReleaseHazardCnt
+  io.perf.bpOther := bpOtherCnt
   // print 
   if(DCACHE_DEBUG){
     when(io.coreReq.fire){

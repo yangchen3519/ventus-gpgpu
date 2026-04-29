@@ -108,6 +108,15 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val perfIsWrite       = Output(Bool())
     val perfIsUncached    = Output(Bool())
     val perfIsHit         = Output(Bool())
+    val bpSt0TagProbeBusy = Output(Bool())
+    val bpSt0RefillHazard = Output(Bool())
+    val bpSt0PendingMissHazard = Output(Bool())
+    val bpSt0PipeBusy = Output(Bool())
+    val bpSt1HitBusy = Output(Bool())
+    val bpSt1MissMshrBusy = Output(Bool())
+    val bpSt1MissMemBusy = Output(Bool())
+    val bpSt1MissRspBusy = Output(Bool())
+    val bpSt1ReleaseHazard = Output(Bool())
   })
 
   //====== st0 =======
@@ -165,6 +174,30 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       !io.tA_Hit_st1.hit &&
       (BlockAddr_st0 === BlockAddr_st1) &&
       (if(MMU_ENABLED) (io.CoreReq.bits.asid.get === CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get) else true.B)
+  val cacheReqLike_st0 =
+    CoreReqControl_st0.isRead ||
+      CoreReqControl_st0.isWrite ||
+      CoreReqControl_st0.isAMO ||
+      CoreReqControl_st0.isLR ||
+      CoreReqControl_st0.isSC
+  io.bpSt0TagProbeBusy := io.CoreReq.valid && !io.reqSource && cacheReqLike_st0 && !io.Probe_tA_ready
+  io.bpSt0RefillHazard :=
+    io.CoreReq.valid && !io.reqSource && cacheReqLike_st0 && io.Probe_tA_ready && refillSameBlock_st0
+  io.bpSt0PendingMissHazard :=
+    io.CoreReq.valid &&
+      !io.reqSource &&
+      cacheReqLike_st0 &&
+      io.Probe_tA_ready &&
+      !refillSameBlock_st0 &&
+      pendingReadMissSameBlock_st0
+  io.bpSt0PipeBusy :=
+    io.CoreReq.valid &&
+      !io.reqSource &&
+      cacheReqLike_st0 &&
+      io.Probe_tA_ready &&
+      !refillSameBlock_st0 &&
+      !pendingReadMissSameBlock_st0 &&
+      !CoreReq_pipeReg_st0_st1.enq.ready
 
   //output bits
   io.Probe_MSHR.blockAddr := BlockAddr_st0
@@ -551,12 +584,47 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   when(CoreReq_pipeReg_st0_st1.deq.valid && mshrReleasingSameBlock_st1){
     st1_ready := false.B
   }
+  val bpSt1ReleaseHazard = CoreReq_pipeReg_st0_st1.deq.valid && mshrReleasingSameBlock_st1
+  val bpSt1HitBusy =
+    st1_valid &&
+      !bpSt1ReleaseHazard &&
+      (Control_st1.isRead || Control_st1.isWrite) &&
+      CacheHit_st1 &&
+      !st1_ready
+  val bpSt1MissMshrBusy =
+    st1_valid &&
+      !bpSt1ReleaseHazard &&
+      (Control_st1.isRead || Control_st1.isWrite) &&
+      !CacheHit_st1 &&
+      ((!io.Mshr_st1_ready) ||
+        (Control_st1.isRead &&
+          !(MshrStatus === PrimaryAvail || MshrStatus === SecondaryAvail)))
+  val bpSt1MissRspBusy =
+    st1_valid &&
+      !bpSt1ReleaseHazard &&
+      Control_st1.isWrite &&
+      !CacheHit_st1 &&
+      !bpSt1MissMshrBusy &&
+      (io.memRsp_coreRsp.valid || !CoreRsp_pipeReg_st1_st2.enq.ready)
+  val bpSt1MissMemBusy =
+    st1_valid &&
+      !bpSt1ReleaseHazard &&
+      (Control_st1.isRead || Control_st1.isWrite) &&
+      !CacheHit_st1 &&
+      !bpSt1MissMshrBusy &&
+      !bpSt1MissRspBusy &&
+      !io.MissReq_Mem.ready
   io.perfReqFire := CoreReq_pipeReg_st0_st1.deq.fire
   io.perfReqFromReplay := fromReplay_st1
   io.perfIsRead := Control_st1.isRead
   io.perfIsWrite := Control_st1.isWrite
   io.perfIsUncached := Control_st1.isUncached
   io.perfIsHit := CacheHit_st1
+  io.bpSt1HitBusy := bpSt1HitBusy
+  io.bpSt1MissMshrBusy := bpSt1MissMshrBusy
+  io.bpSt1MissMemBusy := bpSt1MissMemBusy
+  io.bpSt1MissRspBusy := bpSt1MissRspBusy
+  io.bpSt1ReleaseHazard := bpSt1ReleaseHazard
   //write hit
   val getBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
   getBankEn.io.perLaneBlockIdx :=  CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.blockOffset)

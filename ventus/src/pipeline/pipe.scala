@@ -52,6 +52,7 @@ class pipe() extends Module{
     val perfReset = Input(Bool())
     val perf_pipeline = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
     val perf_inst_class = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
+    val perf_lsu = Output(new LsuPerfCounters)
   })
   val issue_stall=Wire(Bool())
   val flush=Wire(Bool())
@@ -141,6 +142,9 @@ class pipe() extends Module{
   lsu.io.csr_pds:=csrfile.io.lsu_pds
   lsu.io.csr_tid:=csrfile.io.lsu_tid
   lsu.io.csr_numw:=csrfile.io.lsu_numw
+  lsu.io.perfEnable := io.perfEnable
+  lsu.io.perfReset := io.perfReset
+  io.perf_lsu := lsu.io.perf
   if (SPIKE_OUTPUT) {
     when(csrfile.io.in.valid && csrfile.io.in.bits.ctrl.custom_signal_0){
       printf(p"sm ${sm_id} warp ${Decimal(csrfile.io.in.bits.ctrl.wid)} " +
@@ -439,6 +443,7 @@ class pipe() extends Module{
   val activeCycles = RegInit(0.U(64.W))
   val totalScalarIssued = RegInit(0.U(64.W))
   val totalVectorIssued = RegInit(0.U(64.W))
+  val threadIssuedSlots = RegInit(0.U(64.W))
   val execStructuralHazardCyclesX = RegInit(0.U(64.W))
   val execStructuralHazardCyclesV = RegInit(0.U(64.W))
   val dataDepStallCycles = RegInit(0.U(64.W))
@@ -542,11 +547,15 @@ class pipe() extends Module{
   val flushEvent = warp_sche.io.flush.valid && !RegNext(warp_sche.io.flush.valid, false.B)
   val issueXClassInc = classifyIssuedInst(issueX.io.in.fire, issueX.io.in.bits.ctrl, 0.U, false.B)
   val issueVClassInc = classifyIssuedInst(issueV.io.in.fire, issueV.io.in.bits.ctrl, issueV.io.in.bits.mask.asUInt, true.B)
+  val issuedThreadSlotsInc =
+    Mux(issueX.io.in.fire, num_thread.U(64.W), 0.U(64.W)) +
+      Mux(issueV.io.in.fire, PopCount(issueV.io.in.bits.mask.asUInt), 0.U(64.W))
 
   when(io.perfReset){
     activeCycles := 0.U
     totalScalarIssued := 0.U
     totalVectorIssued := 0.U
+    threadIssuedSlots := 0.U
     execStructuralHazardCyclesX := 0.U
     execStructuralHazardCyclesV := 0.U
     dataDepStallCycles := 0.U
@@ -611,6 +620,7 @@ class pipe() extends Module{
     when(issueV.io.in.fire){
       totalVectorIssued := totalVectorIssued + 1.U
     }
+    threadIssuedSlots := threadIssuedSlots + issuedThreadSlotsInc
 
     when(issueX.io.in.valid && !issueX.io.in.ready){
       execStructuralHazardCyclesX := execStructuralHazardCyclesX + 1.U
@@ -642,6 +652,7 @@ class pipe() extends Module{
     perf.activeCycles := activeCycles
     perf.totalScalarIssued := totalScalarIssued
     perf.totalVectorIssued := totalVectorIssued
+    perf.threadIssuedSlots := threadIssuedSlots
     perf.execStructuralHazardCyclesX := execStructuralHazardCyclesX
     perf.execStructuralHazardCyclesV := execStructuralHazardCyclesV
     perf.dataDepStallCycles := dataDepStallCycles

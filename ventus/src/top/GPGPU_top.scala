@@ -364,6 +364,9 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   def sumInstClassPerfCounter(select: InstClassPerfCounters => UInt): UInt = {
     if (PMU_INST_CLASS) sm_wrapper.map(sm => select(sm.inst_class_perf.get)).reduce(_ + _) else 0.U(64.W)
   }
+  def sumLsuPerfCounter(select: LsuPerfCounters => UInt): UInt = {
+    sm_wrapper.map(sm => select(sm.lsu_perf)).reduce(_ + _)
+  }
   def percentOf(numer: UInt, denom: UInt): UInt = {
     Mux(denom === 0.U, 0.U(32.W), ((numer * 100.U) / denom)(31, 0))
   }
@@ -388,6 +391,21 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val l1dReadTransactions = sumPerfCounter(_.readTransactions)
   val l1dWriteTransactions = sumPerfCounter(_.writeTransactions)
   val l1dMshrBusyCycles = sumPerfCounter(_.mshrBusyCycles)
+  val l1dBackpressureCycles = sumPerfCounter(_.backpressureCycles)
+  val l1dBpBlockedCoreReq = sumPerfCounter(_.bpBlockedCoreReq)
+  val l1dBpRtabFull = sumPerfCounter(_.bpRtabFull)
+  val l1dBpRtabAlmostFull = sumPerfCounter(_.bpRtabAlmostFull)
+  val l1dBpReplay = sumPerfCounter(_.bpReplay)
+  val l1dBpSt0TagProbeBusy = sumPerfCounter(_.bpSt0TagProbeBusy)
+  val l1dBpSt0RefillHazard = sumPerfCounter(_.bpSt0RefillHazard)
+  val l1dBpSt0PendingMissHazard = sumPerfCounter(_.bpSt0PendingMissHazard)
+  val l1dBpSt0PipeBusy = sumPerfCounter(_.bpSt0PipeBusy)
+  val l1dBpSt1HitBusy = sumPerfCounter(_.bpSt1HitBusy)
+  val l1dBpSt1MissMshrBusy = sumPerfCounter(_.bpSt1MissMshrBusy)
+  val l1dBpSt1MissMemBusy = sumPerfCounter(_.bpSt1MissMemBusy)
+  val l1dBpSt1MissRspBusy = sumPerfCounter(_.bpSt1MissRspBusy)
+  val l1dBpSt1ReleaseHazard = sumPerfCounter(_.bpSt1ReleaseHazard)
+  val l1dBpOther = sumPerfCounter(_.bpOther)
   val l1dTotalMiss = l1dReadMiss + l1dWriteMiss
   val l1dTotalHit = l1dTotalReq - l1dTotalMiss
   val l1dTotalBytes = l1dReadBytes + l1dWriteBytes
@@ -395,6 +413,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val pmuActiveCycles = sumPipelinePerfCounter(_.activeCycles)
   val pmuTotalScalarIssued = sumPipelinePerfCounter(_.totalScalarIssued)
   val pmuTotalVectorIssued = sumPipelinePerfCounter(_.totalVectorIssued)
+  val pmuThreadIssuedSlots = sumPipelinePerfCounter(_.threadIssuedSlots)
   val pmuExecHazardX = sumPipelinePerfCounter(_.execStructuralHazardCyclesX)
   val pmuExecHazardV = sumPipelinePerfCounter(_.execStructuralHazardCyclesV)
   val pmuDataDepStall = sumPipelinePerfCounter(_.dataDepStallCycles)
@@ -428,6 +447,13 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val pmuMulOps = sumInstClassPerfCounter(_.mulOps)
   val pmuSfuOps = sumInstClassPerfCounter(_.sfuOps)
   val pmuTotalIssued = pmuTotalScalarIssued + pmuTotalVectorIssued
+  val pmuThreadUtilPct =
+    Mux(pmuActiveCycles === 0.U, 0.U(32.W), ((pmuThreadIssuedSlots * 100.U) / (pmuActiveCycles * num_thread.U))(31, 0))
+  val lsuCoalescableInsts = sumLsuPerfCounter(_.globalMemCoalescableInsts)
+  val lsuAtomicInsts = sumLsuPerfCounter(_.globalMemAtomicInsts)
+  val lsuActiveThreads = sumLsuPerfCounter(_.globalMemActiveThreads)
+  val lsuSegments = sumLsuPerfCounter(_.globalMemSegments)
+  val lsuSegmentThreads = sumLsuPerfCounter(_.globalMemSegmentThreads)
 
   val perfWindowStarted = RegInit(false.B)
   val perfWindowPrinted = RegInit(false.B)
@@ -436,6 +462,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val totalActiveCycles = RegInit(0.U(64.W))
   val totalScalarIssued = RegInit(0.U(64.W))
   val totalVectorIssued = RegInit(0.U(64.W))
+  val totalThreadIssuedSlots = RegInit(0.U(64.W))
   val totalExecHazardX = RegInit(0.U(64.W))
   val totalExecHazardV = RegInit(0.U(64.W))
   val totalDataDepStall = RegInit(0.U(64.W))
@@ -484,6 +511,26 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val totalL1dReadTransactions = RegInit(0.U(64.W))
   val totalL1dWriteTransactions = RegInit(0.U(64.W))
   val totalL1dMshrBusyCycles = RegInit(0.U(64.W))
+  val totalL1dBackpressureCycles = RegInit(0.U(64.W))
+  val totalL1dBpBlockedCoreReq = RegInit(0.U(64.W))
+  val totalL1dBpRtabFull = RegInit(0.U(64.W))
+  val totalL1dBpRtabAlmostFull = RegInit(0.U(64.W))
+  val totalL1dBpReplay = RegInit(0.U(64.W))
+  val totalL1dBpSt0TagProbeBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt0RefillHazard = RegInit(0.U(64.W))
+  val totalL1dBpSt0PendingMissHazard = RegInit(0.U(64.W))
+  val totalL1dBpSt0PipeBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt1HitBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt1MissMshrBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt1MissMemBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt1MissRspBusy = RegInit(0.U(64.W))
+  val totalL1dBpSt1ReleaseHazard = RegInit(0.U(64.W))
+  val totalL1dBpOther = RegInit(0.U(64.W))
+  val totalLsuCoalescableInsts = RegInit(0.U(64.W))
+  val totalLsuAtomicInsts = RegInit(0.U(64.W))
+  val totalLsuActiveThreads = RegInit(0.U(64.W))
+  val totalLsuSegments = RegInit(0.U(64.W))
+  val totalLsuSegmentThreads = RegInit(0.U(64.W))
   val perfStartPulse = io.host_req.fire && !perfWindowStarted
   val perfDumpPulse = io.perfDump && perfWindowStarted && !perfWindowPrinted
   when(perfStartPulse){
@@ -497,6 +544,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     totalActiveCycles := totalActiveCycles + pmuActiveCycles
     totalScalarIssued := totalScalarIssued + pmuTotalScalarIssued
     totalVectorIssued := totalVectorIssued + pmuTotalVectorIssued
+    totalThreadIssuedSlots := totalThreadIssuedSlots + pmuThreadIssuedSlots
     totalExecHazardX := totalExecHazardX + pmuExecHazardX
     totalExecHazardV := totalExecHazardV + pmuExecHazardV
     totalDataDepStall := totalDataDepStall + pmuDataDepStall
@@ -545,6 +593,26 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
     totalL1dReadTransactions := totalL1dReadTransactions + l1dReadTransactions
     totalL1dWriteTransactions := totalL1dWriteTransactions + l1dWriteTransactions
     totalL1dMshrBusyCycles := totalL1dMshrBusyCycles + l1dMshrBusyCycles
+    totalL1dBackpressureCycles := totalL1dBackpressureCycles + l1dBackpressureCycles
+    totalL1dBpBlockedCoreReq := totalL1dBpBlockedCoreReq + l1dBpBlockedCoreReq
+    totalL1dBpRtabFull := totalL1dBpRtabFull + l1dBpRtabFull
+    totalL1dBpRtabAlmostFull := totalL1dBpRtabAlmostFull + l1dBpRtabAlmostFull
+    totalL1dBpReplay := totalL1dBpReplay + l1dBpReplay
+    totalL1dBpSt0TagProbeBusy := totalL1dBpSt0TagProbeBusy + l1dBpSt0TagProbeBusy
+    totalL1dBpSt0RefillHazard := totalL1dBpSt0RefillHazard + l1dBpSt0RefillHazard
+    totalL1dBpSt0PendingMissHazard := totalL1dBpSt0PendingMissHazard + l1dBpSt0PendingMissHazard
+    totalL1dBpSt0PipeBusy := totalL1dBpSt0PipeBusy + l1dBpSt0PipeBusy
+    totalL1dBpSt1HitBusy := totalL1dBpSt1HitBusy + l1dBpSt1HitBusy
+    totalL1dBpSt1MissMshrBusy := totalL1dBpSt1MissMshrBusy + l1dBpSt1MissMshrBusy
+    totalL1dBpSt1MissMemBusy := totalL1dBpSt1MissMemBusy + l1dBpSt1MissMemBusy
+    totalL1dBpSt1MissRspBusy := totalL1dBpSt1MissRspBusy + l1dBpSt1MissRspBusy
+    totalL1dBpSt1ReleaseHazard := totalL1dBpSt1ReleaseHazard + l1dBpSt1ReleaseHazard
+    totalL1dBpOther := totalL1dBpOther + l1dBpOther
+    totalLsuCoalescableInsts := totalLsuCoalescableInsts + lsuCoalescableInsts
+    totalLsuAtomicInsts := totalLsuAtomicInsts + lsuAtomicInsts
+    totalLsuActiveThreads := totalLsuActiveThreads + lsuActiveThreads
+    totalLsuSegments := totalLsuSegments + lsuSegments
+    totalLsuSegmentThreads := totalLsuSegmentThreads + lsuSegmentThreads
   }
   sm_wrapper.foreach { sm =>
     sm.perfEnable := perfWindowStarted || perfStartPulse
@@ -561,6 +629,7 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val summaryActiveCycles = includeCurrentWindow(totalActiveCycles, pmuActiveCycles)
   val summaryScalarIssued = includeCurrentWindow(totalScalarIssued, pmuTotalScalarIssued)
   val summaryVectorIssued = includeCurrentWindow(totalVectorIssued, pmuTotalVectorIssued)
+  val summaryThreadIssuedSlots = includeCurrentWindow(totalThreadIssuedSlots, pmuThreadIssuedSlots)
   val summaryExecHazardX = includeCurrentWindow(totalExecHazardX, pmuExecHazardX)
   val summaryExecHazardV = includeCurrentWindow(totalExecHazardV, pmuExecHazardV)
   val summaryDataDepStall = includeCurrentWindow(totalDataDepStall, pmuDataDepStall)
@@ -609,6 +678,26 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
   val summaryL1dReadTransactions = includeCurrentWindow(totalL1dReadTransactions, l1dReadTransactions)
   val summaryL1dWriteTransactions = includeCurrentWindow(totalL1dWriteTransactions, l1dWriteTransactions)
   val summaryL1dMshrBusyCycles = includeCurrentWindow(totalL1dMshrBusyCycles, l1dMshrBusyCycles)
+  val summaryL1dBackpressureCycles = includeCurrentWindow(totalL1dBackpressureCycles, l1dBackpressureCycles)
+  val summaryL1dBpBlockedCoreReq = includeCurrentWindow(totalL1dBpBlockedCoreReq, l1dBpBlockedCoreReq)
+  val summaryL1dBpRtabFull = includeCurrentWindow(totalL1dBpRtabFull, l1dBpRtabFull)
+  val summaryL1dBpRtabAlmostFull = includeCurrentWindow(totalL1dBpRtabAlmostFull, l1dBpRtabAlmostFull)
+  val summaryL1dBpReplay = includeCurrentWindow(totalL1dBpReplay, l1dBpReplay)
+  val summaryL1dBpSt0TagProbeBusy = includeCurrentWindow(totalL1dBpSt0TagProbeBusy, l1dBpSt0TagProbeBusy)
+  val summaryL1dBpSt0RefillHazard = includeCurrentWindow(totalL1dBpSt0RefillHazard, l1dBpSt0RefillHazard)
+  val summaryL1dBpSt0PendingMissHazard = includeCurrentWindow(totalL1dBpSt0PendingMissHazard, l1dBpSt0PendingMissHazard)
+  val summaryL1dBpSt0PipeBusy = includeCurrentWindow(totalL1dBpSt0PipeBusy, l1dBpSt0PipeBusy)
+  val summaryL1dBpSt1HitBusy = includeCurrentWindow(totalL1dBpSt1HitBusy, l1dBpSt1HitBusy)
+  val summaryL1dBpSt1MissMshrBusy = includeCurrentWindow(totalL1dBpSt1MissMshrBusy, l1dBpSt1MissMshrBusy)
+  val summaryL1dBpSt1MissMemBusy = includeCurrentWindow(totalL1dBpSt1MissMemBusy, l1dBpSt1MissMemBusy)
+  val summaryL1dBpSt1MissRspBusy = includeCurrentWindow(totalL1dBpSt1MissRspBusy, l1dBpSt1MissRspBusy)
+  val summaryL1dBpSt1ReleaseHazard = includeCurrentWindow(totalL1dBpSt1ReleaseHazard, l1dBpSt1ReleaseHazard)
+  val summaryL1dBpOther = includeCurrentWindow(totalL1dBpOther, l1dBpOther)
+  val summaryLsuCoalescableInsts = includeCurrentWindow(totalLsuCoalescableInsts, lsuCoalescableInsts)
+  val summaryLsuAtomicInsts = includeCurrentWindow(totalLsuAtomicInsts, lsuAtomicInsts)
+  val summaryLsuActiveThreads = includeCurrentWindow(totalLsuActiveThreads, lsuActiveThreads)
+  val summaryLsuSegments = includeCurrentWindow(totalLsuSegments, lsuSegments)
+  val summaryLsuSegmentThreads = includeCurrentWindow(totalLsuSegmentThreads, lsuSegmentThreads)
   val summaryTotalIssued = summaryScalarIssued + summaryVectorIssued
   val summaryTotalClassIssued = summaryComputeIssued + summaryMemIssued + summaryCtrlIssued
 
@@ -617,81 +706,110 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
 
     // ========== 1. 总体概览 ==========
     if (PMU_PIPELINE) {
-      printf(p"[PROGRAM ${programId}] [OVERVIEW] active cycles        : ${pmuActiveCycles}\n")
-      printf(p"[PROGRAM ${programId}] [OVERVIEW] scalar issued        : ${pmuTotalScalarIssued}\n")
-      printf(p"[PROGRAM ${programId}] [OVERVIEW] vector issued        : ${pmuTotalVectorIssued}\n")
-      printf(p"[PROGRAM ${programId}] [OVERVIEW] total issued         : ${pmuTotalIssued}\n")
-      printf(p"[PROGRAM ${programId}] [OVERVIEW] IPC                  : ${Mux(pmuActiveCycles === 0.U, 0.U, (pmuTotalIssued * 100.U) / pmuActiveCycles)} (x0.01)\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] active cycles (cycles): ${pmuActiveCycles}\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] scalar issued (inst) : ${pmuTotalScalarIssued}\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] vector issued (inst) : ${pmuTotalVectorIssued}\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] total issued (inst)  : ${pmuTotalIssued}\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] thread issued slots (thd-slots): ${pmuThreadIssuedSlots}\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] issued thd-slot util : ${pmuThreadUtilPct}%\n")
+      printf(p"[PROGRAM ${programId}] [OVERVIEW] IPC (inst/cycle)     : ${Mux(pmuActiveCycles === 0.U, 0.U, (pmuTotalIssued * 100.U) / pmuActiveCycles)} (x0.01)\n")
     }
 
-    // ========== 2. 算力性能 ==========
-    if (PMU_INST_CLASS) {
-      printf(p"[PROGRAM ${programId}] [COMPUTE] total ops            : ${pmuComputeOps}\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] ops/cycle            : ${Mux(pmuActiveCycles === 0.U, 0.U, (pmuComputeOps * 100.U) / pmuActiveCycles)} (x0.01)\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] FPU ops              : ${pmuFpuOps}\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] vALU ops             : ${pmuValuOps}\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] sALU ops             : ${pmuSaluOps}\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] MUL ops              : ${pmuMulOps}\n")
-      printf(p"[PROGRAM ${programId}] [COMPUTE] SFU ops              : ${pmuSfuOps}\n")
+    // ========== 2. Stall分析 ==========
+    if (PMU_PIPELINE) {
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X (cycles): ${pmuExecHazardX} (${percentOf(pmuExecHazardX, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V (cycles): ${pmuExecHazardV} (${percentOf(pmuExecHazardV, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] data dependency (cycles): ${pmuDataDepStall} (${percentOf(pmuDataDepStall, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] barrier stall (cycles): ${pmuBarrierStall} (${percentOf(pmuBarrierStall, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] control flush (events): ${pmuCtrlFlushCnt}\n")
+      printf(p"[PROGRAM ${programId}] [STALL] frontend stall (cycles): ${pmuFrontendStall} (${percentOf(pmuFrontendStall, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure (cycles): ${pmuLsuBackpressure} (${percentOf(pmuLsuBackpressure, pmuActiveCycles)}%)\n")
+      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full (cycles): ${pmuIbufferFullCycles} (${percentOf(pmuIbufferFullCycles, pmuActiveCycles)}%)\n")
     }
 
-    // ========== 3. L1访存性能 ==========
-    printf(p"[PROGRAM ${programId}] [L1D BW] read bytes            : ${l1dReadBytes}\n")
-    printf(p"[PROGRAM ${programId}] [L1D BW] write bytes           : ${l1dWriteBytes}\n")
-    printf(p"[PROGRAM ${programId}] [L1D BW] total bytes           : ${l1dTotalBytes}\n")
-    printf(p"[PROGRAM ${programId}] [L1D BW] read B/cyc            : ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dReadBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
-    printf(p"[PROGRAM ${programId}] [L1D BW] write B/cyc           : ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dWriteBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
-    printf(p"[PROGRAM ${programId}] [L1D BW] total B/cyc           : ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dTotalBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
-    printf(p"[PROGRAM ${programId}] [L1D TX] read transactions     : ${l1dReadTransactions}\n")
-    printf(p"[PROGRAM ${programId}] [L1D TX] write transactions    : ${l1dWriteTransactions}\n")
-    printf(p"[PROGRAM ${programId}] [L1D TX] total requests        : ${l1dTotalReq}\n")
+    // ========== 3. Memory诊断 ==========
+    printf(p"[PROGRAM ${programId}] [L1D BW] read bytes (B)        : ${l1dReadBytes}\n")
+    printf(p"[PROGRAM ${programId}] [L1D BW] write bytes (B)       : ${l1dWriteBytes}\n")
+    printf(p"[PROGRAM ${programId}] [L1D BW] total bytes (B)       : ${l1dTotalBytes}\n")
+    printf(p"[PROGRAM ${programId}] [L1D BW] read bandwidth (B/cycle): ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dReadBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BW] write bandwidth (B/cycle): ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dWriteBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BW] total bandwidth (B/cycle): ${Mux(pmuActiveCycles === 0.U, 0.U, (l1dTotalBytes * 100.U) / pmuActiveCycles)} (x0.01)\n")
+    printf(p"[PROGRAM ${programId}] [L1D TX] read transactions (req): ${l1dReadTransactions}\n")
+    printf(p"[PROGRAM ${programId}] [L1D TX] write transactions (req): ${l1dWriteTransactions}\n")
+    printf(p"[PROGRAM ${programId}] [L1D TX] total requests (req) : ${l1dTotalReq}\n")
     printf(p"[PROGRAM ${programId}] [L1D HIT] hit rate             : ${percentOf(l1dTotalHit, l1dTotalReq)}% (${l1dTotalHit}/${l1dTotalReq})\n")
     printf(p"[PROGRAM ${programId}] [L1D MSHR] utilization         : ${percentOf(l1dMshrBusyCycles, pmuActiveCycles)}% (${l1dMshrBusyCycles}/${pmuActiveCycles})\n")
 
     // ========== 4. L1 miss细分 ==========
-    printf(p"[PROGRAM ${programId}] [L1D MISS] read alloc MSHR     : ${l1dReadAllocMshr}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISS] read hit MSHR       : ${l1dReadHitMshr}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISS] read entry full     : ${l1dReadMshrEntryFull}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISS] read subentry full  : ${l1dReadMshrSubentryFull}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISS] write alloc MSHR    : ${l1dWriteAllocMshr}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISS] write hit WSHR      : ${l1dWriteHitWshr}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISC] replacements        : ${l1dReplacement}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISC] dirty writebacks    : ${l1dDirtyWriteback}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISC] MSHR full cycles    : ${l1dMshrFullCycles}\n")
-    printf(p"[PROGRAM ${programId}] [L1D MISC] RTAB replays        : ${l1dRtabReplays}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] read alloc MSHR (req): ${l1dReadAllocMshr}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] read hit MSHR (req): ${l1dReadHitMshr}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] read entry full (req): ${l1dReadMshrEntryFull}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] read subentry full (req): ${l1dReadMshrSubentryFull}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] write alloc MSHR (req): ${l1dWriteAllocMshr}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISS] write hit WSHR (req): ${l1dWriteHitWshr}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISC] replacements (lines): ${l1dReplacement}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISC] dirty writebacks (req): ${l1dDirtyWriteback}\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISC] MSHR full (cycles)  : ${l1dMshrFullCycles} (${percentOf(l1dMshrFullCycles, pmuActiveCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D MISC] RTAB replays (req)  : ${l1dRtabReplays}\n")
 
-    // ========== 5. Stall分析 ==========
-    if (PMU_PIPELINE) {
-      printf(p"[PROGRAM ${programId}] [STALL] exec hazard X         : ${pmuExecHazardX}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] exec hazard V         : ${pmuExecHazardV}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] data dependency       : ${pmuDataDepStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] barrier stall         : ${pmuBarrierStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] control flush         : ${pmuCtrlFlushCnt}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] frontend stall        : ${pmuFrontendStall}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] lsu backpressure      : ${pmuLsuBackpressure}\n")
-      printf(p"[PROGRAM ${programId}] [STALL] ibuffer full          : ${pmuIbufferFullCycles}\n")
+    // ========== 3.1 LSU coalescing ==========
+    printf(p"[PROGRAM ${programId}] [LSU COAL] coalescable insts (inst): ${lsuCoalescableInsts}\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] atomic insts (inst) : ${lsuAtomicInsts}\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] active threads (thd): ${lsuActiveThreads}\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] emitted segments (seg): ${lsuSegments}\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] segment threads (thd): ${lsuSegmentThreads}\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] avg seg/inst         : ${Mux(lsuCoalescableInsts === 0.U, 0.U, (lsuSegments * 100.U) / lsuCoalescableInsts)} (x0.01)\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] avg thd/seg          : ${Mux(lsuSegments === 0.U, 0.U, (lsuSegmentThreads * 100.U) / lsuSegments)} (x0.01)\n")
+    printf(p"[PROGRAM ${programId}] [LSU COAL] efficiency           : ${Mux(lsuSegments === 0.U, 0.U, (lsuSegmentThreads * 100.U) / (lsuSegments * num_thread.U))}%\n")
+
+    // ========== 3.2 L1 backpressure ==========
+    printf(p"[PROGRAM ${programId}] [L1D BP] total blocked (cycles): ${l1dBackpressureCycles} (${percentOf(l1dBackpressureCycles, pmuActiveCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] blockCoreReq (cycles): ${l1dBpBlockedCoreReq} (${percentOf(l1dBpBlockedCoreReq, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] rtab full (cycles)   : ${l1dBpRtabFull} (${percentOf(l1dBpRtabFull, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] rtab almost full (cycles): ${l1dBpRtabAlmostFull} (${percentOf(l1dBpRtabAlmostFull, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] replay occupied (cycles): ${l1dBpReplay} (${percentOf(l1dBpReplay, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st0 tag probe busy (cycles): ${l1dBpSt0TagProbeBusy} (${percentOf(l1dBpSt0TagProbeBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st0 refill hazard (cycles): ${l1dBpSt0RefillHazard} (${percentOf(l1dBpSt0RefillHazard, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st0 pending miss (cycles): ${l1dBpSt0PendingMissHazard} (${percentOf(l1dBpSt0PendingMissHazard, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st0 pipe busy (cycles): ${l1dBpSt0PipeBusy} (${percentOf(l1dBpSt0PipeBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st1 hit busy (cycles): ${l1dBpSt1HitBusy} (${percentOf(l1dBpSt1HitBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st1 miss mshr (cycles): ${l1dBpSt1MissMshrBusy} (${percentOf(l1dBpSt1MissMshrBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st1 miss mem (cycles): ${l1dBpSt1MissMemBusy} (${percentOf(l1dBpSt1MissMemBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st1 miss rsp (cycles): ${l1dBpSt1MissRspBusy} (${percentOf(l1dBpSt1MissRspBusy, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] st1 release hazard (cycles): ${l1dBpSt1ReleaseHazard} (${percentOf(l1dBpSt1ReleaseHazard, l1dBackpressureCycles)}%)\n")
+    printf(p"[PROGRAM ${programId}] [L1D BP] other (cycles)       : ${l1dBpOther} (${percentOf(l1dBpOther, l1dBackpressureCycles)}%)\n")
+
+    // ========== 4. 算力性能 ==========
+    if (PMU_INST_CLASS) {
+      printf(p"[PROGRAM ${programId}] [COMPUTE] total ops (ops)      : ${pmuComputeOps}\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] throughput (ops/cycle): ${Mux(pmuActiveCycles === 0.U, 0.U, (pmuComputeOps * 100.U) / pmuActiveCycles)} (x0.01)\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] FPU ops (ops)        : ${pmuFpuOps}\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] vALU ops (ops)       : ${pmuValuOps}\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] sALU ops (ops)       : ${pmuSaluOps}\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] MUL ops (ops)        : ${pmuMulOps}\n")
+      printf(p"[PROGRAM ${programId}] [COMPUTE] SFU ops (ops)        : ${pmuSfuOps}\n")
     }
 
-    // ========== 6. 指令分类 ==========
+    // ========== 5. 指令分类 ==========
     if (PMU_INST_CLASS) {
-      printf(p"[PROGRAM ${programId}] [INST] total class issued     : ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST] compute issued         : ${pmuComputeIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - sALU               : ${pmuComputeSaluIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - vALU               : ${pmuComputeValuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - FPU                : ${pmuComputeFpuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - MUL                : ${pmuComputeMulIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - SFU                : ${pmuComputeSfuIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - TensorCore         : ${pmuComputeTensorCoreIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST] mem issued             : ${pmuMemIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - load               : ${pmuMemLoadIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - store              : ${pmuMemStoreIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - atomic             : ${pmuMemAtomicIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST] ctrl issued            : ${pmuCtrlIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - branch             : ${pmuCtrlBranchIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - barrier            : ${pmuCtrlBarrierIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - csr                : ${pmuCtrlCsrIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - simt stack         : ${pmuCtrlSimtStackIssued}\n")
-      printf(p"[PROGRAM ${programId}] [INST]   - fence              : ${pmuCtrlFenceIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST] total class issued (inst): ${pmuComputeIssued + pmuMemIssued + pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST] compute issued (inst) : ${pmuComputeIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - sALU (inst)       : ${pmuComputeSaluIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - vALU (inst)       : ${pmuComputeValuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - FPU (inst)        : ${pmuComputeFpuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - MUL (inst)        : ${pmuComputeMulIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - SFU (inst)        : ${pmuComputeSfuIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - TensorCore (inst) : ${pmuComputeTensorCoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST] mem issued (inst)     : ${pmuMemIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - load (inst)       : ${pmuMemLoadIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - store (inst)      : ${pmuMemStoreIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - atomic (inst)     : ${pmuMemAtomicIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST] ctrl issued (inst)    : ${pmuCtrlIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - branch (inst)     : ${pmuCtrlBranchIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - barrier (inst)    : ${pmuCtrlBarrierIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - csr (inst)        : ${pmuCtrlCsrIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - simt stack (inst) : ${pmuCtrlSimtStackIssued}\n")
+      printf(p"[PROGRAM ${programId}] [INST]   - fence (inst)      : ${pmuCtrlFenceIssued}\n")
     }
   }
   when((perfDumpPulse || io.perfDumpSummary) && summaryProgramWindows =/= 0.U){
@@ -699,81 +817,108 @@ class GPGPU_top(implicit p: Parameters, FakeCache: Boolean = false, SV: Option[m
 
     // ========== 1. 总体概览 ==========
     if (PMU_PIPELINE) {
-      printf(p"[TESTCASE TOTAL] [OVERVIEW] active cycles        : ${summaryActiveCycles}\n")
-      printf(p"[TESTCASE TOTAL] [OVERVIEW] scalar issued        : ${summaryScalarIssued}\n")
-      printf(p"[TESTCASE TOTAL] [OVERVIEW] vector issued        : ${summaryVectorIssued}\n")
-      printf(p"[TESTCASE TOTAL] [OVERVIEW] total issued         : ${summaryTotalIssued}\n")
-      printf(p"[TESTCASE TOTAL] [OVERVIEW] IPC                  : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryTotalIssued * 100.U) / summaryActiveCycles)} (x0.01)\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] active cycles (cycles): ${summaryActiveCycles}\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] scalar issued (inst) : ${summaryScalarIssued}\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] vector issued (inst) : ${summaryVectorIssued}\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] total issued (inst)  : ${summaryTotalIssued}\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] thread issued slots (thd-slots): ${summaryThreadIssuedSlots}\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] issued thd-slot util : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryThreadIssuedSlots * 100.U) / (summaryActiveCycles * num_thread.U))}%\n")
+      printf(p"[TESTCASE TOTAL] [OVERVIEW] IPC (inst/cycle)     : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryTotalIssued * 100.U) / summaryActiveCycles)} (x0.01)\n")
     }
 
-    // ========== 2. 算力性能 ==========
-    if (PMU_INST_CLASS) {
-      printf(p"[TESTCASE TOTAL] [COMPUTE] total ops            : ${summaryComputeOps}\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] ops/cycle            : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryComputeOps * 100.U) / summaryActiveCycles)} (x0.01)\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] FPU ops              : ${summaryFpuOps}\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] vALU ops             : ${summaryValuOps}\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] sALU ops             : ${summarySaluOps}\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] MUL ops              : ${summaryMulOps}\n")
-      printf(p"[TESTCASE TOTAL] [COMPUTE] SFU ops              : ${summarySfuOps}\n")
+    // ========== 2. Stall分析 ==========
+    if (PMU_PIPELINE) {
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X (cycles): ${summaryExecHazardX} (${percentOf(summaryExecHazardX, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V (cycles): ${summaryExecHazardV} (${percentOf(summaryExecHazardV, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] data dependency (cycles): ${summaryDataDepStall} (${percentOf(summaryDataDepStall, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] barrier stall (cycles): ${summaryBarrierStall} (${percentOf(summaryBarrierStall, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] control flush (events): ${summaryCtrlFlushCnt}\n")
+      printf(p"[TESTCASE TOTAL] [STALL] frontend stall (cycles): ${summaryFrontendStall} (${percentOf(summaryFrontendStall, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure (cycles): ${summaryLsuBackpressure} (${percentOf(summaryLsuBackpressure, summaryActiveCycles)}%)\n")
+      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full (cycles): ${summaryIbufferFullCycles} (${percentOf(summaryIbufferFullCycles, summaryActiveCycles)}%)\n")
     }
 
-    // ========== 3. L1访存性能 ==========
-    printf(p"[TESTCASE TOTAL] [L1D BW] read bytes            : ${summaryL1dReadBytes}\n")
-    printf(p"[TESTCASE TOTAL] [L1D BW] write bytes           : ${summaryL1dWriteBytes}\n")
-    printf(p"[TESTCASE TOTAL] [L1D BW] total bytes           : ${summaryL1dReadBytes + summaryL1dWriteBytes}\n")
-    printf(p"[TESTCASE TOTAL] [L1D BW] read B/cyc            : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryL1dReadBytes * 100.U) / summaryActiveCycles)} (x0.01)\n")
-    printf(p"[TESTCASE TOTAL] [L1D BW] write B/cyc           : ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryL1dWriteBytes * 100.U) / summaryActiveCycles)} (x0.01)\n")
-    printf(p"[TESTCASE TOTAL] [L1D BW] total B/cyc           : ${Mux(summaryActiveCycles === 0.U, 0.U, ((summaryL1dReadBytes + summaryL1dWriteBytes) * 100.U) / summaryActiveCycles)} (x0.01)\n")
-    printf(p"[TESTCASE TOTAL] [L1D TX] read transactions     : ${summaryL1dReadTransactions}\n")
-    printf(p"[TESTCASE TOTAL] [L1D TX] write transactions    : ${summaryL1dWriteTransactions}\n")
-    printf(p"[TESTCASE TOTAL] [L1D TX] total requests        : ${summaryL1dReq}\n")
+    // ========== 3. Memory诊断 ==========
+    printf(p"[TESTCASE TOTAL] [L1D BW] read bytes (B)        : ${summaryL1dReadBytes}\n")
+    printf(p"[TESTCASE TOTAL] [L1D BW] write bytes (B)       : ${summaryL1dWriteBytes}\n")
+    printf(p"[TESTCASE TOTAL] [L1D BW] total bytes (B)       : ${summaryL1dReadBytes + summaryL1dWriteBytes}\n")
+    printf(p"[TESTCASE TOTAL] [L1D BW] read bandwidth (B/cycle): ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryL1dReadBytes * 100.U) / summaryActiveCycles)} (x0.01)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BW] write bandwidth (B/cycle): ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryL1dWriteBytes * 100.U) / summaryActiveCycles)} (x0.01)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BW] total bandwidth (B/cycle): ${Mux(summaryActiveCycles === 0.U, 0.U, ((summaryL1dReadBytes + summaryL1dWriteBytes) * 100.U) / summaryActiveCycles)} (x0.01)\n")
+    printf(p"[TESTCASE TOTAL] [L1D TX] read transactions (req): ${summaryL1dReadTransactions}\n")
+    printf(p"[TESTCASE TOTAL] [L1D TX] write transactions (req): ${summaryL1dWriteTransactions}\n")
+    printf(p"[TESTCASE TOTAL] [L1D TX] total requests (req) : ${summaryL1dReq}\n")
     printf(p"[TESTCASE TOTAL] [L1D HIT] hit rate             : ${percentOf(summaryL1dHit, summaryL1dReq)}% (${summaryL1dHit}/${summaryL1dReq})\n")
     printf(p"[TESTCASE TOTAL] [L1D MSHR] utilization         : ${percentOf(summaryL1dMshrBusyCycles, summaryActiveCycles)}% (${summaryL1dMshrBusyCycles}/${summaryActiveCycles})\n")
 
     // ========== 4. L1 miss细分 ==========
-    printf(p"[TESTCASE TOTAL] [L1D MISS] read alloc MSHR     : ${summaryL1dReadAllocMshr}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISS] read hit MSHR       : ${summaryL1dReadHitMshr}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISS] read entry full     : ${summaryL1dReadMshrEntryFull}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISS] read subentry full  : ${summaryL1dReadMshrSubentryFull}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISS] write alloc MSHR    : ${summaryL1dWriteAllocMshr}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISS] write hit WSHR      : ${summaryL1dWriteHitWshr}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISC] replacements        : ${summaryL1dReplacement}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISC] dirty writebacks    : ${summaryL1dDirtyWriteback}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISC] MSHR full cycles    : ${summaryL1dMshrFullCycles}\n")
-    printf(p"[TESTCASE TOTAL] [L1D MISC] RTAB replays        : ${summaryL1dRtabReplays}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] read alloc MSHR (req): ${summaryL1dReadAllocMshr}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] read hit MSHR (req): ${summaryL1dReadHitMshr}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] read entry full (req): ${summaryL1dReadMshrEntryFull}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] read subentry full (req): ${summaryL1dReadMshrSubentryFull}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] write alloc MSHR (req): ${summaryL1dWriteAllocMshr}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISS] write hit WSHR (req): ${summaryL1dWriteHitWshr}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISC] replacements (lines): ${summaryL1dReplacement}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISC] dirty writebacks (req): ${summaryL1dDirtyWriteback}\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISC] MSHR full (cycles)  : ${summaryL1dMshrFullCycles} (${percentOf(summaryL1dMshrFullCycles, summaryActiveCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D MISC] RTAB replays (req)  : ${summaryL1dRtabReplays}\n")
 
-    // ========== 5. Stall分析 ==========
-    if (PMU_PIPELINE) {
-      printf(p"[TESTCASE TOTAL] [STALL] exec hazard X         : ${summaryExecHazardX}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] exec hazard V         : ${summaryExecHazardV}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] data dependency       : ${summaryDataDepStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] barrier stall         : ${summaryBarrierStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] control flush         : ${summaryCtrlFlushCnt}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] frontend stall        : ${summaryFrontendStall}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] lsu backpressure      : ${summaryLsuBackpressure}\n")
-      printf(p"[TESTCASE TOTAL] [STALL] ibuffer full          : ${summaryIbufferFullCycles}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] coalescable insts (inst): ${summaryLsuCoalescableInsts}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] atomic insts (inst) : ${summaryLsuAtomicInsts}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] active threads (thd): ${summaryLsuActiveThreads}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] emitted segments (seg): ${summaryLsuSegments}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] segment threads (thd): ${summaryLsuSegmentThreads}\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] avg seg/inst         : ${Mux(summaryLsuCoalescableInsts === 0.U, 0.U, (summaryLsuSegments * 100.U) / summaryLsuCoalescableInsts)} (x0.01)\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] avg thd/seg          : ${Mux(summaryLsuSegments === 0.U, 0.U, (summaryLsuSegmentThreads * 100.U) / summaryLsuSegments)} (x0.01)\n")
+    printf(p"[TESTCASE TOTAL] [LSU COAL] efficiency           : ${Mux(summaryLsuSegments === 0.U, 0.U, (summaryLsuSegmentThreads * 100.U) / (summaryLsuSegments * num_thread.U))}%\n")
+
+    printf(p"[TESTCASE TOTAL] [L1D BP] total blocked (cycles): ${summaryL1dBackpressureCycles} (${percentOf(summaryL1dBackpressureCycles, summaryActiveCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] blockCoreReq (cycles): ${summaryL1dBpBlockedCoreReq} (${percentOf(summaryL1dBpBlockedCoreReq, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] rtab full (cycles)   : ${summaryL1dBpRtabFull} (${percentOf(summaryL1dBpRtabFull, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] rtab almost full (cycles): ${summaryL1dBpRtabAlmostFull} (${percentOf(summaryL1dBpRtabAlmostFull, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] replay occupied (cycles): ${summaryL1dBpReplay} (${percentOf(summaryL1dBpReplay, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st0 tag probe busy (cycles): ${summaryL1dBpSt0TagProbeBusy} (${percentOf(summaryL1dBpSt0TagProbeBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st0 refill hazard (cycles): ${summaryL1dBpSt0RefillHazard} (${percentOf(summaryL1dBpSt0RefillHazard, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st0 pending miss (cycles): ${summaryL1dBpSt0PendingMissHazard} (${percentOf(summaryL1dBpSt0PendingMissHazard, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st0 pipe busy (cycles): ${summaryL1dBpSt0PipeBusy} (${percentOf(summaryL1dBpSt0PipeBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st1 hit busy (cycles): ${summaryL1dBpSt1HitBusy} (${percentOf(summaryL1dBpSt1HitBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st1 miss mshr (cycles): ${summaryL1dBpSt1MissMshrBusy} (${percentOf(summaryL1dBpSt1MissMshrBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st1 miss mem (cycles): ${summaryL1dBpSt1MissMemBusy} (${percentOf(summaryL1dBpSt1MissMemBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st1 miss rsp (cycles): ${summaryL1dBpSt1MissRspBusy} (${percentOf(summaryL1dBpSt1MissRspBusy, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] st1 release hazard (cycles): ${summaryL1dBpSt1ReleaseHazard} (${percentOf(summaryL1dBpSt1ReleaseHazard, summaryL1dBackpressureCycles)}%)\n")
+    printf(p"[TESTCASE TOTAL] [L1D BP] other (cycles)       : ${summaryL1dBpOther} (${percentOf(summaryL1dBpOther, summaryL1dBackpressureCycles)}%)\n")
+
+    // ========== 4. 算力性能 ==========
+    if (PMU_INST_CLASS) {
+      printf(p"[TESTCASE TOTAL] [COMPUTE] total ops (ops)      : ${summaryComputeOps}\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] throughput (ops/cycle): ${Mux(summaryActiveCycles === 0.U, 0.U, (summaryComputeOps * 100.U) / summaryActiveCycles)} (x0.01)\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] FPU ops (ops)        : ${summaryFpuOps}\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] vALU ops (ops)       : ${summaryValuOps}\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] sALU ops (ops)       : ${summarySaluOps}\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] MUL ops (ops)        : ${summaryMulOps}\n")
+      printf(p"[TESTCASE TOTAL] [COMPUTE] SFU ops (ops)        : ${summarySfuOps}\n")
     }
 
-    // ========== 6. 指令分类 ==========
+    // ========== 5. 指令分类 ==========
     if (PMU_INST_CLASS) {
-      printf(p"[TESTCASE TOTAL] [INST] total class issued     : ${summaryTotalClassIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST] compute issued         : ${summaryComputeIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - sALU               : ${summaryComputeSaluIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - vALU               : ${summaryComputeValuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - FPU                : ${summaryComputeFpuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - MUL                : ${summaryComputeMulIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - SFU                : ${summaryComputeSfuIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - TensorCore         : ${summaryComputeTensorCoreIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST] mem issued             : ${summaryMemIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - load               : ${summaryMemLoadIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - store              : ${summaryMemStoreIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - atomic             : ${summaryMemAtomicIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST] ctrl issued            : ${summaryCtrlIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - branch             : ${summaryCtrlBranchIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - barrier            : ${summaryCtrlBarrierIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - csr                : ${summaryCtrlCsrIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - simt stack         : ${summaryCtrlSimtStackIssued}\n")
-      printf(p"[TESTCASE TOTAL] [INST]   - fence              : ${summaryCtrlFenceIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST] total class issued (inst): ${summaryTotalClassIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST] compute issued (inst) : ${summaryComputeIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - sALU (inst)       : ${summaryComputeSaluIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - vALU (inst)       : ${summaryComputeValuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - FPU (inst)        : ${summaryComputeFpuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - MUL (inst)        : ${summaryComputeMulIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - SFU (inst)        : ${summaryComputeSfuIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - TensorCore (inst) : ${summaryComputeTensorCoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST] mem issued (inst)     : ${summaryMemIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - load (inst)       : ${summaryMemLoadIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - store (inst)      : ${summaryMemStoreIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - atomic (inst)     : ${summaryMemAtomicIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST] ctrl issued (inst)    : ${summaryCtrlIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - branch (inst)     : ${summaryCtrlBranchIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - barrier (inst)    : ${summaryCtrlBarrierIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - csr (inst)        : ${summaryCtrlCsrIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - simt stack (inst) : ${summaryCtrlSimtStackIssued}\n")
+      printf(p"[TESTCASE TOTAL] [INST]   - fence (inst)      : ${summaryCtrlFenceIssued}\n")
     }
   }
 
@@ -806,6 +951,7 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
     val dcache_perf = Output(new DCachePerfCounters)
     val pipeline_perf = if(PMU_PIPELINE) Some(Output(new PipelinePerfCounters)) else None
     val inst_class_perf = if(PMU_INST_CLASS) Some(Output(new InstClassPerfCounters)) else None
+    val lsu_perf = Output(new LsuPerfCounters)
     val inst = if (SINGLE_INST) Some(Flipped(DecoupledIO(UInt(32.W)))) else None
     val inst_cnt = if(INST_CNT) Some(Output(UInt(32.W))) else if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
     val l2tlbReq = if(MMU_ENABLED) Some(Vec(num_cache_in_sm, DecoupledIO(new Bundle{
@@ -832,6 +978,7 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   io.inst_cnt2.foreach( _ := pipe.io.inst_cnt2.getOrElse(0.U))
   io.pipeline_perf.foreach(_ := pipe.io.perf_pipeline.getOrElse(0.U.asTypeOf(new PipelinePerfCounters)))
   io.inst_class_perf.foreach(_ := pipe.io.perf_inst_class.getOrElse(0.U.asTypeOf(new InstClassPerfCounters)))
+  io.lsu_perf := pipe.io.perf_lsu
   val cnt=Counter(10)
   when(cnt.value<5.U){cnt.inc()}
   when(cnt.value===5.U){pipe.io.pc_reset:=false.B}

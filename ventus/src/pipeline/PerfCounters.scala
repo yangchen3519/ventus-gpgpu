@@ -16,6 +16,7 @@ class PipelinePerfCounters extends Bundle {
   val activeCycles = UInt(64.W)
   val totalScalarIssued = UInt(64.W)
   val totalVectorIssued = UInt(64.W)
+  val threadIssuedSlots = UInt(64.W)
 
   val execStructuralHazardCyclesX = UInt(64.W)
   val execStructuralHazardCyclesV = UInt(64.W)
@@ -56,4 +57,12 @@ class InstClassPerfCounters extends Bundle {
   val saluOps = UInt(64.W)              // sALU操作数
   val mulOps = UInt(64.W)               // MUL操作数
   val sfuOps = UInt(64.W)               // SFU操作数
+}
+
+class LsuPerfCounters extends Bundle {
+  val globalMemCoalescableInsts = UInt(64.W)
+  val globalMemAtomicInsts = UInt(64.W)
+  val globalMemActiveThreads = UInt(64.W)
+  val globalMemSegments = UInt(64.W)
+  val globalMemSegmentThreads = UInt(64.W)
 }
