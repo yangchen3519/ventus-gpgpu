@@ -39,6 +39,7 @@ class DCacheCoreReq(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) exte
   val tag = UInt(TagBits.W)
   val asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
   val setIdx = UInt(SetIdxBits.W)
+  val blockAddr = UInt(bABits.W)
   val perLaneAddr = Vec(NLanes, new DCachePerLaneAddr)
   val data = Vec(NLanes, UInt(WordLength.W))
   val spike_info=if(SPIKE_OUTPUT) Some(new cache_spike_info(SV.getOrElse(mmu.SV32))) else None

@@ -91,6 +91,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
       val cu_id = UInt(log2Ceil(NUM_CU).W)                  // Global CU ID of this WG
       val wg_slot_id = UInt(log2Ceil(NUM_WG_SLOT).W)
       val num_resource = UInt(log2Ceil(NUM_RESOURCE+1).W)
+      val resource_limit = UInt(log2Ceil(NUM_RESOURCE+1).W) // active allocatable capacity of this CU
       val wg_id: Option[UInt] = if(CONFIG.DEBUG) Some(UInt(CONFIG.WG.WG_ID_WIDTH)) else None
     }))
     val baseaddr = DecoupledIO(new Bundle {                 // result of alloc req, resource base address of the allocating WG
@@ -102,6 +103,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
     val rtram_sel = DecoupledIO(new Bundle {                // control the Bus-MUX of this handler-rtram group
       val sel = UInt(log2Ceil(NUM_CU_LOCAL).W)              // cu_id_local
     })
+    val active_resource_limit = Input(Vec(NUM_CU_LOCAL, UInt(log2Ceil(NUM_RESOURCE+1).W)))
     val rtram_data = new io_rtram(NUM_RESOURCE = NUM_RESOURCE, NUM_WG_SLOT = NUM_WG_SLOT)   // IO to the selected rtram
   })
 
@@ -184,11 +186,13 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
 
   // Action 1: get WG info when a new alloc/dealloc request is received
   val wgsize = Reg(UInt(log2Ceil(NUM_RESOURCE+1).W))
+  val wg_resource_limit = RegInit(NUM_RESOURCE.U(log2Ceil(NUM_RESOURCE+1).W))
   val wgslot = Reg(UInt(log2Ceil(NUM_WG_SLOT).W))
   val wg_cu = Reg(UInt(log2Ceil(CONFIG.GPU.NUM_CU).W))
   assert(!(io.alloc.fire && io.dealloc.fire)) // only one request can be received in a same cycle
 
   wgsize := Mux(io.alloc.fire, io.alloc.bits.num_resource, wgsize)
+  wg_resource_limit := Mux(io.alloc.fire, io.alloc.bits.resource_limit, wg_resource_limit)
   wgslot := Mux1H(Seq(
     io.alloc.fire -> io.alloc.bits.wg_slot_id,
     io.dealloc.fire -> io.dealloc.bits.wg_slot_id,
@@ -255,6 +259,8 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
   val fsm_a_valid_p1 = RegInit(false.B)                       // valid  signal of pipeline stage 1
   val fsm_a_init_p1 = RegInit(false.B)                        // init   signal of pipeline stage 1
   val fsm_a_finish_p1 = RegInit(false.B)                      // finish signal of pipeline stage 1
+  val wg_resource_limit_last_addr = Wire(UInt(log2Ceil(NUM_RESOURCE+1).W))
+  wg_resource_limit_last_addr := Mux(wg_resource_limit === 0.U, 0.U, wg_resource_limit - 1.U)
   // if you want to send control/data signal to io.rtram, use rtram_alloc
   // if you want to get signal value from io.rtram, use rtram_alloc(recommended) or io.rtram, both ok
   fsm_a_ptr2 := DontCare  // switch default
@@ -267,7 +273,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
       // In the first iteration step, we will check the resource segment before the first WG, even if it may not exist
       // In the last iteration step, we will check the resource segment after the last WG, even if it may not exist
       fsm_a_cnt := 0.U                    // Iteration range: 0 to rtram.cnt
-      fsm_a_found_size := NUM_RESOURCE.U  // Initial assumption: assume we select the whole resource.
+      fsm_a_found_size := wg_resource_limit  // Initial assumption: assume we select the whole active resource.
       fsm_a_found_addr := 0.U             // ⬑ This will be changed to the right segment later, unless rtram.cnt==0 and the initial assumption is correct
       fsm_a_found_ptr1 := DontCare        // In our initial assumption, the linked-list is empty, so we don't care this pointer
       fsm_a_found_ptr2 := DontCare
@@ -301,7 +307,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
       // pipeline stage 3: resource segment size calc & found result update
       val addr1, addr2 = Wire(UInt(log2Ceil(NUM_RESOURCE+1).W)) // addr1 = this resource segment's start addr - 1, addr2 = resource segment's end addr
       addr1 := Mux(fsm_a_init_p1, (~0.U(log2Ceil(NUM_RESOURCE+1).W)).asUInt, rtram_alloc.addr2.rd.data)
-      addr2 := Mux(fsm_a_finish_p1, (NUM_RESOURCE-1).U, rtram_alloc.addr1.rd.data.pad(log2Ceil(NUM_RESOURCE+1)) - 1.U)
+      addr2 := Mux(fsm_a_finish_p1, wg_resource_limit_last_addr, rtram_alloc.addr1.rd.data.pad(log2Ceil(NUM_RESOURCE+1)) - 1.U)
       val size = WireInit(UInt(log2Ceil(NUM_RESOURCE+1).W), addr2 - addr1) // resource segment size
       val result_update = (size >= wgsize) && (size < fsm_a_found_size)
       fsm_a_found_size := Mux(fsm_a_valid_p1 && result_update, size, fsm_a_found_size)
@@ -332,7 +338,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
       fsm_a_valid_p1 := false.B
       fsm_a_init_p1 := false.B
       fsm_a_finish_p1 := false.B
-      fsm_a_found_size := NUM_RESOURCE.U
+      fsm_a_found_size := wg_resource_limit
       // Useful for WRITE & OUTPUT, keep their value unchanged until finishing
       fsm_a_found_addr := Mux(fsm_a_next =/= fsm_a, 0.U, fsm_a_found_addr)
       fsm_a_found_ptr1 := Mux(fsm_a_next =/= fsm_a, DontCare, fsm_a_found_ptr1)
@@ -453,6 +459,9 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
   val fsm_s_finish_p1 = RegInit(false.B)
   val fsm_s_valid_p1 = RegInit(false.B)
   val fsm_s_cnt = RegInit(0.U(log2Ceil(NUM_WG_SLOT+2).W))   // you can also reuse fsm_a_cnt
+  val active_resource_limit = io.active_resource_limit(cu_sel)
+  val active_resource_limit_last_addr = Wire(UInt(log2Ceil(NUM_RESOURCE+1).W))
+  active_resource_limit_last_addr := Mux(active_resource_limit === 0.U, 0.U, active_resource_limit - 1.U)
   fsm_s_cnt := Mux(fsm =/= FSM.SCAN || fsm_next =/= FSM.SCAN, 0.U, fsm_s_cnt + 1.U)
   val rtcache_data = RegInit(VecInit.fill(NUM_RT_RESULT)(0.U(log2Ceil(NUM_RESOURCE+1).W)))  // scan result, rtcache_data[0] is the largest resource segment
   when(fsm === FSM.SCAN){
@@ -468,7 +477,7 @@ class resource_table_handler(NUM_CU_LOCAL: Int, NUM_RESOURCE: Int, NUM_RT_RESULT
     fsm_s_valid_p1 := (fsm_s_valid_p1 && !fsm_s_finish_p1) || (fsm_s_cnt === 0.U)
     // pipeline stage 2: resource segment size calc & sort
     val addr1 = WireInit(UInt(log2Ceil(NUM_RESOURCE+1).W), Mux(fsm_s_init_p1, (~0.U(log2Ceil(NUM_RESOURCE+1).W)).asUInt, rtram_scan.addr2.rd.data.pad(log2Ceil(NUM_RESOURCE+1))))
-    val addr2 = WireInit(UInt(log2Ceil(NUM_RESOURCE+1).W), Mux(fsm_s_finish_p1, NUM_RESOURCE.U - 1.U, rtram_scan.addr1.rd.data.pad(log2Ceil(NUM_RESOURCE+1)) - 1.U))
+    val addr2 = WireInit(UInt(log2Ceil(NUM_RESOURCE+1).W), Mux(fsm_s_finish_p1, active_resource_limit_last_addr, rtram_scan.addr1.rd.data.pad(log2Ceil(NUM_RESOURCE+1)) - 1.U))
     val thissize = WireInit(UInt(log2Ceil(NUM_RESOURCE+1).W), addr2 - addr1)
     val result = Wire(Vec(NUM_RT_RESULT, UInt(log2Ceil(NUM_RESOURCE+1).W)))
     if(NUM_RT_RESULT == 1) {
@@ -641,6 +650,8 @@ class resource_table_top(val NUM_CU_PER_GROUP: Int = 1) extends Module {
   assert(NUM_HANDLER_PER_GROUP == 1)  // This implement (direct mapping from handler to rtram) only supports NUM_HANDLER_PER_CU=1
   val NUM_WG_SLOT = CONFIG.GPU.NUM_WG_SLOT
   val NUM_RT_RESULT = CONFIG.RESOURCE_TABLE.NUM_RESULT
+  val active_lds_limit =
+    RegInit(VecInit.fill(NUM_HANDLER, NUM_CU_PER_GROUP)(CONFIG.GPU.NUM_LDS.U(log2Ceil(NUM_LDS+1).W)))
 
   // Auxiliary function
   // Convert alloc/dealloc request CU ID to RT_handler group ID and local CU ID
@@ -680,6 +691,9 @@ class resource_table_top(val NUM_CU_PER_GROUP: Int = 1) extends Module {
     handler_lds_io(i).rtram_data := DontCare
     handler_sgpr_io(i).rtram_data := DontCare
     handler_vgpr_io(i).rtram_data := DontCare
+    handler_lds_io(i).active_resource_limit(j) := active_lds_limit(i)(j)
+    handler_sgpr_io(i).active_resource_limit(j) := NUM_SGPR.U
+    handler_vgpr_io(i).active_resource_limit(j) := NUM_VGPR.U
   }
 
   // Dynamic Mux within a group, between handler and rtram
@@ -728,17 +742,23 @@ class resource_table_top(val NUM_CU_PER_GROUP: Int = 1) extends Module {
   alloc_decoupledio.io.in.bits.data0.cu_id := io.alloc.bits.cu_id
   alloc_decoupledio.io.in.bits.data0.wg_slot_id := io.alloc.bits.wg_slot_id
   alloc_decoupledio.io.in.bits.data0.num_resource := io.alloc.bits.num_lds
+  alloc_decoupledio.io.in.bits.data0.resource_limit := io.alloc.bits.lds_limit
   alloc_decoupledio.io.in.bits.data0.cu_id_local := alloc_cuid_local
   // SGPR
   alloc_decoupledio.io.in.bits.data1.cu_id := io.alloc.bits.cu_id
   alloc_decoupledio.io.in.bits.data1.wg_slot_id := io.alloc.bits.wg_slot_id
   alloc_decoupledio.io.in.bits.data1.num_resource := io.alloc.bits.num_sgpr
+  alloc_decoupledio.io.in.bits.data1.resource_limit := NUM_SGPR.U
   alloc_decoupledio.io.in.bits.data1.cu_id_local := alloc_cuid_local
   // VGPR
   alloc_decoupledio.io.in.bits.data2.cu_id := io.alloc.bits.cu_id
   alloc_decoupledio.io.in.bits.data2.wg_slot_id := io.alloc.bits.wg_slot_id
   alloc_decoupledio.io.in.bits.data2.num_resource := io.alloc.bits.num_vgpr
+  alloc_decoupledio.io.in.bits.data2.resource_limit := NUM_VGPR.U
   alloc_decoupledio.io.in.bits.data2.cu_id_local := alloc_cuid_local
+  when(io.alloc.fire) {
+    active_lds_limit(alloc_cuid_group)(alloc_cuid_local) := io.alloc.bits.lds_limit
+  }
   // DEBUG
   if(CONFIG.DEBUG) {
     alloc_decoupledio.io.in.bits.data0.wg_id.get := io.alloc.bits.wg_id.get

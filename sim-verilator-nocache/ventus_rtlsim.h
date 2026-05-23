@@ -31,6 +31,8 @@ typedef struct ventus_kernel_metadata_t {
     uint64_t wg_size;          // 每个workgroup的warp数目
     uint64_t metaDataBaseAddr; // CSR_KNL的值，
     uint64_t ldsSize;          // 每个workgroup使用的local memory的大小
+    uint64_t ldsBankCount;     // 每个workgroup使用的LDS/SMEM partition bank数
+    uint64_t smemBankCountPerSm; // 每个SM中划给SMEM的unified L1 partition bank数
     uint64_t pdsSize;          // 每个thread用到的private memory大小
     uint64_t sgprUsage;        // 每个wavefront(warp)使用的标量寄存器数目
     uint64_t vgprUsage;        // 每个wavefront(warp)(also thread)使用的向量寄存器数目

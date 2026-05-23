@@ -20,6 +20,7 @@ import L1Cache._
 import L1Cache.DCache._
 import L1Cache.AtomicUnit._
 import L1Cache.ShareMem._
+import L1Cache.UnifiedL1._
 import config.config._
 import pipeline._
 import L2cache._
@@ -53,6 +54,7 @@ class host2CTA_data extends Bundle{
   val host_vgpr_size_total  = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_VGPR_MAX+1).W)
   val host_sgpr_size_total  = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_SGPR_MAX+1).W)
   val host_lds_size_total   = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_LDS_MAX+1).W)
+  val host_smem_bank_count  = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W)
   val host_vgpr_size_per_wf = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_VGPR_MAX+1).W)
   val host_sgpr_size_per_wf = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_SGPR_MAX+1).W)
   val host_pds_size_per_wf  = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_PDS_MAX+1).W)
@@ -95,6 +97,11 @@ class CTAinterface extends Module{
   cta_sche.io.host_wg_new.bits.num_pds_per_wf     := io.host2CTA.bits.host_pds_size_per_wf
   cta_sche.io.host_wg_new.bits.csr_kernel         := io.host2CTA.bits.host_csr_knl
   cta_sche.io.host_wg_new.bits.num_lds            := io.host2CTA.bits.host_lds_size_total
+  cta_sche.io.host_wg_new.bits.smem_bank_count    := Mux(
+    io.host2CTA.bits.host_smem_bank_count === 0.U,
+    CTA_SCHE_CONFIG.GPU.UNIFIED_L1_DEFAULT_SMEM_BANKS.U,
+    io.host2CTA.bits.host_smem_bank_count
+  )
   cta_sche.io.host_wg_new.bits.num_sgpr           := io.host2CTA.bits.host_sgpr_size_total
   cta_sche.io.host_wg_new.bits.num_vgpr           := io.host2CTA.bits.host_vgpr_size_total
   cta_sche.io.host_wg_new.bits.num_sgpr_per_wf    := io.host2CTA.bits.host_sgpr_size_per_wf
@@ -113,6 +120,7 @@ class CTAinterface extends Module{
     io.CTA2warp(i).bits.dispatch2cu_wg_wf_count := cta_sche.io.cu_wf_new(i).bits.num_wf
     io.CTA2warp(i).bits.dispatch2cu_wf_size_dispatch   := cta_sche.io.cu_wf_new(i).bits.num_thread_per_wf
     io.CTA2warp(i).bits.dispatch2cu_lds_base_dispatch  := cta_sche.io.cu_wf_new(i).bits.lds_base
+    io.CTA2warp(i).bits.dispatch2cu_smem_bank_count    := cta_sche.io.cu_wf_new(i).bits.smem_bank_count
     io.CTA2warp(i).bits.dispatch2cu_sgpr_base_dispatch := cta_sche.io.cu_wf_new(i).bits.sgpr_base
     io.CTA2warp(i).bits.dispatch2cu_vgpr_base_dispatch := cta_sche.io.cu_wf_new(i).bits.vgpr_base
     io.CTA2warp(i).bits.dispatch2cu_wf_tag_dispatch    := cta_sche.io.cu_wf_new(i).bits.wf_tag
@@ -650,7 +658,25 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
     val inst_cnt2 = if(INST_CNT_2) Some(Output(Vec(2, UInt(32.W)))) else None
   })
   val cta2warp=Module(new CTA2warp)
-  cta2warp.io.CTAreq<>io.CTAreq
+  val activeSmemBanks = RegInit(sharedmem_depth.U(log2Ceil(unified_l1_partition_banks + 1).W))
+  val activeWarpCount = RegInit(0.U(log2Ceil(num_warp + 1).W))
+  val smIdle = activeWarpCount === 0.U
+  val requestedSmemBanks = Mux(
+    io.CTAreq.bits.dispatch2cu_smem_bank_count === 0.U,
+    sharedmem_depth.U,
+    io.CTAreq.bits.dispatch2cu_smem_bank_count
+  )
+  val partitionFlushDone = Wire(Bool())
+  val pendingSmemBanks = Reg(UInt(log2Ceil(unified_l1_partition_banks + 1).W))
+  val switchIdle :: switchFlush :: switchUpdate :: Nil = Enum(3)
+  val partitionSwitchState = RegInit(switchIdle)
+  val partitionSwitchBusy = partitionSwitchState =/= switchIdle
+  val partitionSwitchReq = io.CTAreq.valid && smIdle && (requestedSmemBanks =/= activeSmemBanks)
+  val partitionMatches = requestedSmemBanks === activeSmemBanks
+  val canAcceptPartition = partitionMatches && !partitionSwitchBusy
+  cta2warp.io.CTAreq.valid := io.CTAreq.valid && canAcceptPartition
+  cta2warp.io.CTAreq.bits := io.CTAreq.bits
+  io.CTAreq.ready := cta2warp.io.CTAreq.ready && canAcceptPartition
   cta2warp.io.CTArsp<>io.CTArsp
   val pipe=Module(new pipe())
   pipe.sm_id := sm_id
@@ -666,6 +692,25 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   when(cnt.value===5.U){pipe.io.pc_reset:=false.B}
   pipe.io.warpReq<>cta2warp.io.warpReq
   pipe.io.warpRsp<>cta2warp.io.warpRsp
+  val warpReqFire = cta2warp.io.warpReq.fire
+  val warpRspFire = cta2warp.io.warpRsp.fire
+  when(warpReqFire && !warpRspFire) {
+    activeWarpCount := activeWarpCount + 1.U
+  }.elsewhen(!warpReqFire && warpRspFire) {
+    activeWarpCount := activeWarpCount - 1.U
+  }
+  when(partitionSwitchReq && partitionSwitchState === switchIdle) {
+    pendingSmemBanks := requestedSmemBanks
+    partitionSwitchState := switchFlush
+  }.elsewhen(partitionSwitchState === switchFlush && partitionFlushDone) {
+    partitionSwitchState := switchUpdate
+  }.elsewhen(partitionSwitchState === switchUpdate) {
+    activeSmemBanks := pendingSmemBanks
+    partitionSwitchState := switchIdle
+  }
+  when(io.CTAreq.valid && !canAcceptPartition) {
+    assert(smIdle || partitionMatches, "Busy SM received dispatch with mismatched SMEM partition")
+  }
   pipe.io.wg_id_tag:=cta2warp.io.wg_id_tag
   cta2warp.io.wg_id_lookup:=pipe.io.wg_id_lookup
   val l1Cache2L2Arb = Module(new L1Cache2L2Arbiter()(param))
@@ -718,6 +763,10 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   icache.io.externalFlushPipe.valid :=pipe.io.externalFlushPipe.valid
 
   val dcache = Module(new DataCachev2(SV)(param))
+  val unifiedDataArray = Module(new UnifiedDataArray)
+  dcache.io.activeSmemBanks := activeSmemBanks
+  dcache.io.partitionFlushReq := partitionSwitchState === switchFlush
+  partitionFlushDone := dcache.io.partitionFlushDone
   // **** dcache memRsp ****
   dcache.io.memRsp.valid := l1Cache2L2Arb.io.memRspVecOut(1).valid
   dcache.io.memRsp.bits.d_source := l1Cache2L2Arb.io.memRspVecOut(1).bits.d_source
@@ -730,7 +779,9 @@ class SM_wrapper(FakeCache: Boolean = false, SV: Option[mmu.SVParam] = None) ext
   // **** dcache memReq ****
   l1Cache2L2Arb.io.memReqVecIn.get(1) <> dcache.io.memReq.get
   // **** dcache coreReq ****
-  dcache.io.coreReq <> pipe.io.dcache_req
+  dcache.io.coreReq.valid := pipe.io.dcache_req.valid && !partitionSwitchBusy
+  dcache.io.coreReq.bits := pipe.io.dcache_req.bits
+  pipe.io.dcache_req.ready := dcache.io.coreReq.ready && !partitionSwitchBusy
   // **** dcache coreRsp ****
   pipe.io.dcache_rsp.valid:=dcache.io.coreRsp.valid
   pipe.io.dcache_rsp.bits.instrId:=dcache.io.coreRsp.bits.instrId
@@ -792,10 +843,16 @@ if(MMU_ENABLED) {
 
 
   val sharedmem = Module(new SharedMemory()(param))
+  unifiedDataArray.io.dcacheReadReq <> dcache.io.dataArrayReadReq
+  dcache.io.dataArrayReadResp <> unifiedDataArray.io.dcacheReadResp
+  unifiedDataArray.io.dcacheWriteReq <> dcache.io.dataArrayWriteReq
+  unifiedDataArray.io.smemReq <> sharedmem.io.dataArrayReq
+  sharedmem.io.dataArrayResp <> unifiedDataArray.io.smemResp
   sharedmem.io.coreReq.bits.data:=pipe.io.shared_req.bits.data
   sharedmem.io.coreReq.bits.instrId:=pipe.io.shared_req.bits.instrId
   sharedmem.io.coreReq.bits.isWrite:=pipe.io.shared_req.bits.isWrite
   sharedmem.io.coreReq.bits.setIdx:=pipe.io.shared_req.bits.setIdx
+  sharedmem.io.coreReq.bits.smemBankCount:=activeSmemBanks
   sharedmem.io.coreReq.bits.perLaneAddr:=pipe.io.shared_req.bits.perLaneAddr
   sharedmem.io.coreReq.valid:=pipe.io.shared_req.valid
   pipe.io.shared_req.ready:=sharedmem.io.coreReq.ready
@@ -994,6 +1051,7 @@ class CPUtest(C: TestCase#Props) extends Module{
   io.host2cta.bits.host_vgpr_size_total:= (C.num_warp*32).U
   io.host2cta.bits.host_sgpr_size_total:= (C.num_warp*32).U
   io.host2cta.bits.host_lds_size_total:= 128.U
+  io.host2cta.bits.host_smem_bank_count:= sharedmem_depth.U
   io.host2cta.bits.host_gds_size_total:= 128.U
   io.host2cta.bits.host_vgpr_size_per_wf:=32.U
   io.host2cta.bits.host_sgpr_size_per_wf:=32.U

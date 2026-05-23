@@ -362,12 +362,15 @@ if(MMU_ENABLED) {
   Replacement.io.validOfSet := Reverse(Cat(way_valid(allocateWrite_st1.setIdx)))//Reverse(Cat(way_valid(io.allocateWrite.bits.setIdx)))
   Replacement.io.timeOfSet_st1 := timeAccess.io.r.resp.data//meta_entry_t::get_access_time
   io.waymaskReplacement_st1 := Replacement.io.waymask_st1//tag_array::replace_choice
-  val tagnset = Cat(tagBodyAccess.io.r.resp.data(OHToUInt(Replacement.io.waymask_st1)), //tag
-    allocateWrite_st1.setIdx)
-
   if (!readOnly) {
-    io.a_addrReplacement_st1.get := Cat(tagnset, //setIdx
-      0.U((dcache_BlockOffsetBits + dcache_WordOffsetBits).W)) //blockOffset+wordOffset
+    val replacementTag_st1 = tagBodyAccess.io.r.resp.data(OHToUInt(Replacement.io.waymask_st1))
+    val fullBlockAddrBits = xLen - dcache_BlockOffsetBits - dcache_WordOffsetBits
+    val replacementAddr_st1 =
+      if (tagBits == fullBlockAddrBits)
+        Cat(replacementTag_st1, 0.U((dcache_BlockOffsetBits + dcache_WordOffsetBits).W))
+      else
+        Cat(replacementTag_st1, allocateWrite_st1.setIdx, 0.U((dcache_BlockOffsetBits + dcache_WordOffsetBits).W))
+    io.a_addrReplacement_st1.get := replacementAddr_st1
   }
   // 需要将dirtyMaskAccess读出的数据与way_dirtyAfterValid相与，因为
   io.replace_dirty_mask_st1 := dirtyMaskAccess.io.r.resp.data(OHToUInt(Replacement.io.waymask_st1)).asUInt 

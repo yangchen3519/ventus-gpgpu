@@ -109,6 +109,17 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
 
   def sharemem_size = sharedmem_depth * sharedmem_BlockWords * 4 //bytes
 
+  // Capacity partition granularity for future unified L1D/SMEM implementations.
+  // This is a capacity bank, not the SRAM access bank used by L1D/SMEM datapaths.
+  def unified_l1_partition_bank_bytes = sharedmem_BlockWords * BytesOfWord
+  def dcache_NSets_default = dcache_NSets
+  def dcache_NSets_max = 512
+  def unified_l1_partition_banks =
+    sharedmem_depth + dcache_NSets_default * dcache_NWays
+  def unified_l1_min_l1d_banks = 64
+  def unified_l1_min_smem_banks = 64
+  def unified_l1_l1d_bank_granularity = dcache_NWays
+
   def l2cache_NSets: Int = 32
 
   def l2cache_NWays: Int = 16
@@ -189,6 +200,12 @@ object parameters { //notice log2Ceil(4) returns 2.that is ,n is the total num, 
       val NUM_SGPR = parameters.num_sgpr
       val NUM_VGPR = parameters.num_vgpr
       val NUM_LDS = sharemem_size
+      val UNIFIED_L1_PARTITION_BANK_BYTES = unified_l1_partition_bank_bytes
+      val UNIFIED_L1_PARTITION_BANKS = unified_l1_partition_banks
+      val UNIFIED_L1_MIN_L1D_BANKS = unified_l1_min_l1d_banks
+      val UNIFIED_L1_MIN_SMEM_BANKS = unified_l1_min_smem_banks
+      val UNIFIED_L1_DEFAULT_SMEM_BANKS =
+        unified_l1_partition_banks - unified_l1_min_l1d_banks
     }
     object KERNEL {
       val NUM_WG_MAX = NUM_WG                      // Max number of wg in each kernel

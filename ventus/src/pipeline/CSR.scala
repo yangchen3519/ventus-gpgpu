@@ -112,6 +112,7 @@ class CSRFile extends Module {
     val lsu_pds = Output(UInt(xLen.W))
     val lsu_numw= Output(UInt(xLen.W))
     val lsu_numt= Output(UInt(xLen.W))
+    val lsu_smem_size = Output(UInt(xLen.W))
   })
 
   // Machine Trap-Vector Base-Address Register (mtvec)
@@ -178,6 +179,7 @@ class CSRFile extends Module {
   val wg_id = Reg(UInt(32.W))//TODO:pass wg_id into this module
   val wf_tag_dispatch = Reg(UInt(TAG_WIDTH.W)) //warp id in this workgroup
   val lds_base_dispatch = RegInit(0.U(MEM_ADDR_WIDTH.W))
+  val smem_size_dispatch = RegInit(sharemem_size.U(MEM_ADDR_WIDTH.W))
   val pds_baseaddr = RegInit(0.U(MEM_ADDR_WIDTH.W))
   val wg_id_x = RegInit(0.U(WG_SIZE_X_WIDTH.W))
   val wg_id_y = RegInit(0.U(WG_SIZE_Y_WIDTH.W))
@@ -336,6 +338,8 @@ class CSRFile extends Module {
     wf_tag_dispatch :=io.CTA2csr.bits.CTAdata.dispatch2cu_wf_tag_dispatch(depth_warp-1,0)// wf_tag_dispatch :=io.CTA2csr.bits.CTAdata.dispatch2cu_wf_tag_dispatch
     //todo fix lds_base_dispatch to a certain param
     lds_base_dispatch:=Cat(LDS_BASE.U(32.W)(31, LDS_ID_WIDTH + 1), io.CTA2csr.bits.CTAdata.dispatch2cu_lds_base_dispatch)
+    smem_size_dispatch := io.CTA2csr.bits.CTAdata.dispatch2cu_smem_bank_count *
+      CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
     pds_baseaddr:=io.CTA2csr.bits.CTAdata.dispatch2cu_pds_base_dispatch
     knl_base:=io.CTA2csr.bits.CTAdata.dispatch2cu_csr_knl_dispatch
     wg_id_x:=io.CTA2csr.bits.CTAdata.dispatch2cu_wgid_x_dispatch
@@ -360,6 +364,7 @@ class CSRFile extends Module {
   io.lsu_pds := pds_baseaddr
   io.lsu_numw := wg_wf_count
   io.lsu_numt := wf_size_dispatch
+  io.lsu_smem_size := smem_size_dispatch
 }
 
 class CSRexe extends Module {
@@ -379,6 +384,7 @@ class CSRexe extends Module {
     val lsu_pds = Output(UInt(xLen.W))
     val lsu_numw= Output(UInt(xLen.W))
     val lsu_numt= Output(UInt(xLen.W))
+    val lsu_smem_size = Output(UInt(xLen.W))
     val simt_rpc = Output(UInt(xLen.W))
   })
   val vCSR=VecInit(Seq.fill(num_warp)(Module(new CSRFile).io))
@@ -397,6 +403,7 @@ class CSRexe extends Module {
   io.lsu_pds:=vCSR(io.lsu_wid).lsu_pds
   io.lsu_numw:=vCSR(io.lsu_wid).lsu_numw
   io.lsu_numt:=vCSR(io.lsu_wid).lsu_numt
+  io.lsu_smem_size:=vCSR(io.lsu_wid).lsu_smem_size
   io.simt_rpc:=vCSR(io.simt_wid).simt_rpc
 
   vCSR(io.in.bits.ctrl.wid).write:=io.in.fire

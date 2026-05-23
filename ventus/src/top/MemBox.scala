@@ -57,6 +57,7 @@ class MetaData{
       _.host_vgpr_size_total -> (wg_size * vgprUsage).U,
       _.host_sgpr_size_total -> (wg_size * sgprUsage).U,
       _.host_lds_size_total -> 128.U, // TODO: fix // ldsSize
+      _.host_smem_bank_count -> sharedmem_depth.U,
       _.host_gds_size_total -> 0.U,
       _.host_vgpr_size_per_wf -> vgprUsage.U,
       _.host_sgpr_size_per_wf -> sgprUsage.U,

@@ -20,6 +20,7 @@ class CTAreqData extends Bundle{
   val dispatch2cu_sgpr_base_dispatch = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_SGPR_MAX+1).W)    // sGPR base addr of this WF
   val dispatch2cu_vgpr_base_dispatch = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_VGPR_MAX+1).W)    // vGPR base addr of this WF
   val dispatch2cu_lds_base_dispatch  = UInt(log2Ceil(CTA_SCHE_CONFIG.WG.NUM_LDS_MAX+1).W)     // LDS  base addr of this WF
+  val dispatch2cu_smem_bank_count    = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W) // per-SM SMEM partition banks
   val dispatch2cu_wf_tag_dispatch    = UInt(CTA_SCHE_CONFIG.WG.WF_TAG_WIDTH)    // WF tag = cat(wg_slot_id_in_cu, wf_id_in_wg)
   val dispatch2cu_start_pc_dispatch  = UInt(CTA_SCHE_CONFIG.GPU.MEM_ADDR_WIDTH) // Where program starts, 0x80000000
   val dispatch2cu_pds_base_dispatch  = UInt(CTA_SCHE_CONFIG.GPU.MEM_ADDR_WIDTH)

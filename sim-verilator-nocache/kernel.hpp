@@ -40,6 +40,8 @@ public:
     uint32_t get_num_wf() const { return m_metadata.wg_size; }
     uint32_t get_num_thread() const { return m_metadata.wf_size; }
     uint32_t get_num_lds() const { return m_metadata.ldsSize; }
+    uint32_t get_lds_bank_count_per_wg() const { return m_metadata.ldsBankCount; }
+    uint32_t get_smem_bank_count_per_sm() const { return m_metadata.smemBankCountPerSm; }
     // uint32_t get_num_sgpr() const { return m_metadata.sgprUsage * m_metadata.wg_size; }
     // uint32_t get_num_vgpr() const { return m_metadata.vgprUsage * m_metadata.wg_size; }
     uint32_t get_num_sgpr_per_wf() const { return m_metadata.sgprUsage; }

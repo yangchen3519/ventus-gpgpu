@@ -38,6 +38,7 @@ class io_alloc2rt extends Bundle {
   val cu_id = UInt(log2Ceil(CONFIG.GPU.NUM_CU).W)
   val wg_slot_id = UInt(log2Ceil(CONFIG.GPU.NUM_WG_SLOT).W)
   val num_lds = UInt(log2Ceil(CONFIG.WG.NUM_LDS_MAX+1).W)
+  val lds_limit = UInt(log2Ceil(CONFIG.GPU.NUM_LDS+1).W)
   val num_sgpr = UInt(log2Ceil(CONFIG.WG.NUM_SGPR_MAX+1).W)
   val num_vgpr = UInt(log2Ceil(CONFIG.WG.NUM_VGPR_MAX+1).W)
   val wg_id: Option[UInt] = if(CONFIG.DEBUG) Some(UInt(CONFIG.WG.WG_ID_WIDTH)) else None
@@ -181,6 +182,9 @@ class allocator extends Module {
   // resource table of WG/WF slot
   val wgslot = RegInit(VecInit.fill(NUM_CU)(0.U(CONFIG.GPU.NUM_WG_SLOT.W)))
   val wfslot = RegInit(VecInit.fill(NUM_CU)(0.U(log2Ceil(CONFIG.GPU.NUM_WF_SLOT+1).W)))
+  val active_smem_bank_count = RegInit(
+    VecInit.fill(NUM_CU)(CONFIG.GPU.UNIFIED_L1_DEFAULT_SMEM_BANKS.U(log2Ceil(CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W))
+  )
 
   val wgslot_id = Reg(UInt(log2Ceil(CONFIG.GPU.NUM_WG_SLOT).W)) // generated WG slot ID
   val wgslot_id_1H = Reg(UInt(CONFIG.GPU.NUM_WG_SLOT.W)) // generated WG slot ID, 1-hot encoded
@@ -324,13 +328,28 @@ class allocator extends Module {
   val resource_check_result_rtcache_sel_vgpr = Wire(Vec(RESOURCE_CHECK_CU_STEP, UInt(log2Ceil(NUM_RT_RESULT).W)))
   for(i <- 0 until RESOURCE_CHECK_CU_STEP) {
     val cuid = Mux(cu + i.U >= NUM_CU.U, cu + i.U - NUM_CU.U, cu + i.U)
+    val cuid_idx = cuid(log2Ceil(NUM_CU)-1, 0)
     val result_line_lds  = Wire(Vec(NUM_RT_RESULT, Bool()))
     val result_line_sgpr = Wire(Vec(NUM_RT_RESULT, Bool()))
     val result_line_vgpr = Wire(Vec(NUM_RT_RESULT, Bool()))
+    val cu_idle = wgslot(cuid_idx) === 0.U
+    val effective_smem_bank_count = Mux(cu_idle, wg.smem_bank_count, active_smem_bank_count(cuid_idx))
+    val effective_l1d_bank_count = CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS.U - effective_smem_bank_count
+    val effective_smem_capacity_bytes =
+      effective_smem_bank_count * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+    val smem_partition_legal =
+      effective_smem_bank_count >= CONFIG.GPU.UNIFIED_L1_MIN_SMEM_BANKS.U &&
+      effective_l1d_bank_count >= CONFIG.GPU.UNIFIED_L1_MIN_L1D_BANKS.U &&
+      effective_smem_bank_count <= CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS.U
+    val smem_partition_matches_active =
+      cu_idle || (wg.smem_bank_count === active_smem_bank_count(cuid_idx))
+    val smem_partition_capacity_ok = wg.num_lds <= effective_smem_capacity_bytes
     for(j <- 0 until NUM_RT_RESULT) { // higher rt cache line has higher priority
-      result_line_lds(j)  := rtcache_lds(cuid).size(j)  >= wg.num_lds
-      result_line_sgpr(j) := rtcache_sgpr(cuid).size(j) >= wg.num_sgpr
-      result_line_vgpr(j) := rtcache_vgpr(cuid).size(j) >= wg.num_vgpr
+      val idle_rtcache_size = Mux(j.U === 0.U, effective_smem_capacity_bytes, 0.U)
+      val effective_rtcache_size_lds = Mux(cu_idle, idle_rtcache_size, rtcache_lds(cuid_idx).size(j))
+      result_line_lds(j)  := effective_rtcache_size_lds >= wg.num_lds
+      result_line_sgpr(j) := rtcache_sgpr(cuid_idx).size(j) >= wg.num_sgpr
+      result_line_vgpr(j) := rtcache_vgpr(cuid_idx).size(j) >= wg.num_vgpr
     }
 
     // Priority Encoder, MSB has the highest priority
@@ -338,8 +357,9 @@ class allocator extends Module {
     resource_check_result_rtcache_sel_sgpr(i) := PriorityMux(result_line_sgpr.reverse, (NUM_RT_RESULT-1 to 0 by -1).map(_.asUInt))
     resource_check_result_rtcache_sel_vgpr(i) := PriorityMux(result_line_vgpr.reverse, (NUM_RT_RESULT-1 to 0 by -1).map(_.asUInt))
 
-    resource_check_result(i) := result_line_lds.asUInt.orR && result_line_sgpr.asUInt.orR && result_line_vgpr.asUInt.orR &&
-                               (!wgslot(cuid).andR) && (CONFIG.GPU.NUM_WF_SLOT.U - wfslot(cuid) >= wg.num_wf)
+    resource_check_result(i) := smem_partition_legal && smem_partition_matches_active && smem_partition_capacity_ok &&
+                               result_line_lds.asUInt.orR && result_line_sgpr.asUInt.orR && result_line_vgpr.asUInt.orR &&
+                               (!wgslot(cuid_idx).andR) && (CONFIG.GPU.NUM_WF_SLOT.U - wfslot(cuid_idx) >= wg.num_wf)
   }
 
   // wg slot id generation
@@ -372,12 +392,40 @@ class allocator extends Module {
   val wfslot_alloc_num = Mux(fsm === FSM.ALLOC && fsm =/= fsm_r1, wg.num_wf, 0.U)
   val wfslot_dealloc_num = Mux(io.rt_dealloc.fire, io.rt_dealloc.bits.num_wf, 0.U)
   val cu_tmp = Mux(fsm === FSM.ALLOC && fsm =/= fsm_r1, cu, io.rt_dealloc.bits.cu_id)
+  val selected_cu_idle_before_alloc = wgslot(cu) === 0.U
+  val selected_smem_capacity_bytes_wide =
+    wg.smem_bank_count * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+  val selected_smem_capacity_bytes = Wire(UInt(log2Ceil(CONFIG.GPU.NUM_LDS+1).W))
+  selected_smem_capacity_bytes := Mux(
+    selected_smem_capacity_bytes_wide > CONFIG.GPU.NUM_LDS.U,
+    CONFIG.GPU.NUM_LDS.U,
+    selected_smem_capacity_bytes_wide
+  )
+  val active_smem_capacity_bytes_wide =
+    active_smem_bank_count(cu) * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+  val active_smem_capacity_bytes = Wire(UInt(log2Ceil(CONFIG.GPU.NUM_LDS+1).W))
+  active_smem_capacity_bytes := Mux(
+    active_smem_capacity_bytes_wide > CONFIG.GPU.NUM_LDS.U,
+    CONFIG.GPU.NUM_LDS.U,
+    active_smem_capacity_bytes_wide
+  )
+  when(fsm === FSM.ALLOC && fsm =/= fsm_r1 && selected_cu_idle_before_alloc) {
+    active_smem_bank_count(cu) := wg.smem_bank_count
+  }
   wgslot(cu_tmp) := wgslot(cu_tmp) & (~wgslot_dealloc_bitmask).asUInt | wgslot_alloc_bitmask
   wfslot(cu_tmp) := wfslot(cu_tmp) + wfslot_alloc_num - wfslot_dealloc_num
 
   // ALLOC task1: rtcache update, always finishes in the first cycle, then waiting for FSM.ALLOC ends
   writer_lds.io.alloc_en := (fsm === FSM.ALLOC)
-  writer_lds.io.alloc_rawdata := rtcache_lds(cu)
+  val selected_rtcache_lds = Wire(new datatype_rtcache(NUM_RESOURCE = CONFIG.GPU.NUM_LDS, NUM_RT_RESULT = NUM_RT_RESULT))
+  selected_rtcache_lds := rtcache_lds(cu)
+  when(selected_cu_idle_before_alloc) {
+    selected_rtcache_lds.size(0) := selected_smem_capacity_bytes
+    for(i <- 1 until NUM_RT_RESULT) {
+      selected_rtcache_lds.size(i) := 0.U
+    }
+  }
+  writer_lds.io.alloc_rawdata := selected_rtcache_lds
   writer_lds.io.alloc_size := wg.num_lds
   writer_lds.io.alloc_cuid := cu
   writer_lds.io.alloc_sel := rtcache_lds_sel
@@ -398,6 +446,11 @@ class allocator extends Module {
   io.rt_alloc.bits.cu_id := cu
   io.rt_alloc.bits.wg_slot_id := wgslot_id
   io.rt_alloc.bits.num_lds := wg.num_lds
+  io.rt_alloc.bits.lds_limit := Mux(
+    selected_cu_idle_before_alloc,
+    selected_smem_capacity_bytes,
+    active_smem_capacity_bytes
+  )
   io.rt_alloc.bits.num_sgpr := wg.num_sgpr
   io.rt_alloc.bits.num_vgpr := wg.num_vgpr
   if(CONFIG.DEBUG) { io.rt_alloc.bits.wg_id.get := wg.wg_id.get }

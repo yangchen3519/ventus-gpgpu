@@ -30,6 +30,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
     //to coreReq-io
     val RTAB_full           = Output(Bool())
     val RTAB_almost_full    = Output(Bool()) // can't take st0 request if there is st1 request
+    val RTAB_empty          = Output(Bool())
     //From coreReq_pipe1
     // write miss hit in MSHR:
     // include 1 - probestatus = 3, secondary full, read/write miss, hit in mshr, need to wait for missrspin
@@ -56,6 +57,7 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
   //val seq_Q = Module(new Queue(UInt(log2Up(NRTABs).W),NRTABs,false,false)) // hold the new ptr idx for pop req
   io.RTAB_full := (EntryValid.reduce(_ & _))
   io.RTAB_almost_full := PopCount(EntryValid) === (NRTABs-1).U
+  io.RTAB_empty := !EntryValid.asUInt.orR && !io.coreReq_replay.valid
   val ptr_w = Wire(UInt(log2Up(NRTABs).W))
   ptr_w := ptr//PriorityEncoder(Reverse(Cat(EntryValid.map(!_))))
   io.RTABpushedIdx := ptr_w
@@ -69,12 +71,12 @@ class L1RTAB(implicit p: Parameters) extends DCacheModule {
 
 //st0 req hit in RTAB Entry
   for(i<-0 until NRTABs){
-    blockAddrMatchInRTAB(i) := (Cat(Req_access(i).tag,Req_access(i).setIdx) === Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx))  &&
+    blockAddrMatchInRTAB(i) := (Req_access(i).blockAddr === io.RTABReq_st0.bits.CoreReqData.blockAddr)  &&
       EntryValid(i) && (RTABlink_idx(i).head(1) === 0.U)
       //(Req_access(i).tag === io.coreReq_st1.bits.tag) && (Req_access(i).setIdx === io.coreReq_st1.bits.setIdx) &&  EntryValid(i)
   }
   val bAMatch_st0 = Cat(blockAddrMatchInRTAB).orR // st0 request match in RTAB
-  val bAMatch_st1 = (Cat(io.RTABReq_st0.bits.CoreReqData.tag,io.RTABReq_st0.bits.CoreReqData.setIdx) === Cat(io.RTABReq_st1.bits.CoreReqData.tag,io.RTABReq_st1.bits.CoreReqData.setIdx)) &&
+  val bAMatch_st1 = (io.RTABReq_st0.bits.CoreReqData.blockAddr === io.RTABReq_st1.bits.CoreReqData.blockAddr) &&
     io.RTABReq_st1.valid // st0 request match in st1 request
   val bAMatchIdx = NRTABs.asUInt - 1.U - PriorityEncoder(Cat(blockAddrMatchInRTAB))
 

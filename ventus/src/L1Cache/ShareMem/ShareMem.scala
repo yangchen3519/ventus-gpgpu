@@ -10,8 +10,7 @@
  * See the Mulan PSL v2 for more details. */
 package L1Cache.ShareMem
 
-import L1Cache.L1TagAccess
-import SRAMTemplate.SRAMTemplate
+import L1Cache.UnifiedL1.{UnifiedSMemReq, UnifiedSMemResp}
 import chisel3._
 import chisel3.util._
 import config.config.Parameters
@@ -21,6 +20,7 @@ import top.parameters.sharedmem_depth
 import top.parameters.num_thread
 import top.parameters.BytesOfWord
 import top.parameters.num_lane
+import top.parameters.CTA_SCHE_CONFIG
 
 /*Version Note
 * DCacheCoreReq spec changed, shift some work to LSU
@@ -41,6 +41,7 @@ class ShareMemCoreReq(implicit p: Parameters) extends ShareMemBundle{
   val isWrite = Bool()//Vec(NLanes, Bool())
   //val tag = UInt(TagBits.W)
   val setIdx = UInt(SetIdxBits.W)
+  val smemBankCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W)
   val perLaneAddr = Vec(NLanes, new ShareMemPerLaneAddr)
   val data = Vec(NLanes, UInt(WordLength.W))
 }
@@ -67,6 +68,8 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   val io = IO(new Bundle{
     val coreReq = Flipped(DecoupledIO(new ShareMemCoreReq))
     val coreRsp = DecoupledIO(new ShareMemCoreRsp)
+    val dataArrayReq = Decoupled(new UnifiedSMemReq)
+    val dataArrayResp = Flipped(Valid(new UnifiedSMemResp))
     })
 
   // ******     important submodules     ******
@@ -86,6 +89,11 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
 
   // ******      Arbiter      ******
   val coreReq_st1 = RegEnable(io.coreReq.bits, io.coreReq.fire)
+  val coreReqHasActiveLane = io.coreReq.bits.perLaneAddr.map(_.activeMask).reduce(_ || _)
+  when(io.coreReq.fire && coreReqHasActiveLane) {
+    assert(io.coreReq.bits.setIdx < io.coreReq.bits.smemBankCount,
+      "SharedMemory access exceeds active SMEM partition")
+  }
   BankConfArb.io.coreReqArb.enable := io.coreReq.fire
   BankConfArb.io.coreReqArb.isWrite := Mux(BankConfArb.io.busy,coreReq_st1.isWrite,io.coreReq.bits.isWrite)
   BankConfArb.io.coreReqArb.perLaneAddr := io.coreReq.bits.perLaneAddr
@@ -155,40 +163,16 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   BankConfArb.io.grantReady := rspPipe_st1_ready
   val grantFire = BankConfArb.io.grantValid && BankConfArb.io.grantReady
 
-  // ******     DataAccess      ******
-  //值得注意的是，当读写请求同时来临时，如果读写地址相同，读不应该直接传递写的内容，而是返回旧的内容
-  //这是因为流水线设计里，读请求类型中访问Data array比写类型请求滞后一个流水级
-  //因此读写请求同时发生的话，读请求肯定比写请求早一个周期进入cache
-  //// Note: 上述注释似乎写反了，从代码中看是读请求比写请求提前一个流水级，因此读写同地址时应当返回写入新数据
-  val DataAccessesRRsp = (0 until NBanks).map {i =>
-    val DataAccess = Module(new SRAMTemplate(
-      gen=UInt(8.W),
-      set=NSets*NWays*(BankWords),
-      way=BytesOfWord,
-      shouldReset = false,
-      holdRead = false,
-      singlePort = false,
-      bypassWrite = true
-    ))
-    DataAccess.io.w.req.valid := grantFire && grantMeta.isWrite && grantMeta.dataArrayEn(i)
-    DataAccess.io.w.req.bits.data := DataCorssBarForWrite.io.DataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
-    //this setIdx = setIdx + wayIdx + bankOffset
-    if(BlockOffsetBits-BankIdxBits>0) {
-      DataAccess.io.w.req.bits.setIdx := Cat(grantMeta.setIdx,grantMeta.addrCrsbarOut(i).bankOffset.getOrElse(false.B))
-    } else {
-      DataAccess.io.w.req.bits.setIdx := grantMeta.setIdx
-    }
-    DataAccess.io.w.req.bits.waymask.foreach(_ :=
-      grantMeta.addrCrsbarOut(i).wordOffset1H)
-
-    DataAccess.io.r.req.valid := grantFire && !grantMeta.isWrite && grantMeta.dataArrayEn(i)
-    if(BlockOffsetBits-BankIdxBits>0)
-      DataAccess.io.r.req.bits.setIdx := Cat(
-      grantMeta.setIdx,//setIdx
-      grantMeta.addrCrsbarOut(i).bankOffset.getOrElse(false.B))//bankOffset
-    else DataAccess.io.r.req.bits.setIdx := grantMeta.setIdx
-    Cat(DataAccess.io.r.resp.data.reverse)
+  // ******     Unified data array request      ******
+  io.dataArrayReq.valid := grantFire
+  io.dataArrayReq.bits.physicalSlot := grantMeta.setIdx
+  io.dataArrayReq.bits.isWrite := grantMeta.isWrite
+  io.dataArrayReq.bits.bankEn := grantMeta.dataArrayEn
+  for(i <- 0 until NBanks) {
+    io.dataArrayReq.bits.wdata(i) := DataCorssBarForWrite.io.DataOut(i)
+    io.dataArrayReq.bits.wmask(i) := grantMeta.addrCrsbarOut(i).wordOffset1H
   }
+  assert(io.dataArrayReq.ready, "UnifiedDataArray SMEM port must be always-ready in phase-1")
 
   // ******      data crossbar for write     ******
   DataCorssBarForWrite.io.DataIn := grantMeta.data
@@ -197,7 +181,7 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   DataCorssBarForRead.io.DataIn := rspPipe_st2_data
   DataCorssBarForRead.io.Select1H := rspPipe_st2_bits.dataCrsbarSel1H
 
-  val rspPipe_st1_dataNext = VecInit(DataAccessesRRsp)
+  val rspPipe_st1_dataNext = io.dataArrayResp.bits.rdata
   when(rspPipe_st2_ready){
     rspPipe_st2_valid := rspPipe_st1_valid
     when(rspPipe_st1_valid){

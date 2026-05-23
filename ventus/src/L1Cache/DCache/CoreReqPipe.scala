@@ -31,6 +31,10 @@ class CoreRspPipe_st2(implicit p: Parameters) extends DCacheBundle{
   val readHitSnapshotData = Vec(BlockWords, UInt(WordLength.W))
 }
 class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
+  private val MaxSets = dcache_NSets_max
+  private val MaxSetIdxBits = log2Ceil(MaxSets)
+  private val MaxDataSets = MaxSets * dcache_NWays
+
   val io = IO(new Bundle{
     //st0
     val CoreReq        = Flipped(DecoupledIO(new DCacheCoreReq))
@@ -38,7 +42,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val hasDirty       = Input(Bool())
     val MSHREmpty      = Input(Bool())
     val SMSHREmpty     = Input(Bool())
-    val tA_dirtySetIdx_st0 = Input(UInt(dcache_SetIdxBits.W))
+    val tA_dirtySetIdx_st0 = Input(UInt(MaxSetIdxBits.W))
     val tA_dirtyWayMask_st0= Input(UInt(dcache_NWays.W))
     val reqSource      = Input(Bool()) // 1- from RTAB 0 - from io
     // dirty replace 期间暂停 coreReqPipe，避免 victim line write-hit 干扰写回数据
@@ -47,6 +51,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val refillWrite_valid = Input(Bool())
     val refillWrite_blockAddr = Input(UInt(bABits.W))
     val refillWrite_asid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
+    val activeL1DSetMask = Input(UInt(MaxSetIdxBits.W))
     // MSHR missRspIn 处理期间的“原子态”指示：同拍 mshrStatus 尚未更新，外部不应插入同块的 secondary miss
     val mshrReleasing_valid = Input(Bool())
     val mshrReleasing_blockAddr = Input(UInt(bABits.W))
@@ -54,7 +59,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
     val Probe_MSHR     = Output(new MSHRprobe(bABits, asidLen))
     val probeAsid      = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
-    val Probe_tA       = Output(new SRAMBundleA(NSets))  // todo have ready issue
+    val Probe_tA       = Output(new SRAMBundleA(MaxSets))  // todo have ready issue
     val Probe_tA_ready = Input(Bool())
     val Req_st0_RTAB   = Valid(new RTABReq())
     val flushDirty_tA  = Output(Bool())
@@ -64,8 +69,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
 
     //st1
     
-    val tA_Hit_st1          = Input(new hitStatus(NWays, TagBits))
-    val tA_dirtyTag_st1     = Input(UInt(TagBits.W))
+    val tA_Hit_st1          = Input(new hitStatus(NWays, bABits))
+    val tA_dirtyTag_st1     = Input(UInt(bABits.W))
     val tA_dirtyAsid_st1    = if(MMU_ENABLED) {Some(Input(UInt(asidLen.W)))} else None
     val MSHR_ProbeStatus    = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
     val SMSHR_ProbeStatus   = Input(new SMSHRprobeOut(NMshrEntry))
@@ -74,11 +79,11 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val RTAB_full           = Input(Bool())
     val memRsp_coreRsp      = Flipped(DecoupledIO(new CoreRspPipe_st2))
 
-    val tagFromCore_tA_st1  = Output(UInt(dcache_TagBits.W))
+    val tagFromCore_tA_st1  = Output(UInt(bABits.W))
     val asidFromCore_tA_st1 = if(MMU_ENABLED) {Some(Output(UInt(asidLen.W)))} else None
     val coreReq_Control_st1 = Output(new DCacheControl)
     val perLaneAddr_st1     = Output(Vec(NLanes, new DCachePerLaneAddr))
-    val read_Req_dA         = ValidIO(Vec(BlockWords,new SRAMBundleA(NSets*NWays)))
+    val read_Req_dA         = ValidIO(Vec(BlockWords,new SRAMBundleA(MaxDataSets)))
     val CacheHit_st1        = Output(Bool())
     val Req_st1_RTAB        = ValidIO(new RTABReq())
     val CheckReq_WSHR       = Output(new WSHRreq)
@@ -89,9 +94,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val st1_ready           = Output(Bool())
     // missReq_Mem for read write miss and flu inv dirty write back
     val MissReq_Mem         = DecoupledIO(new WshrMemReqV2)
-    val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
+    val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
     val WriteReq_dA_valid   = Output(Vec(BlockWords,Bool()))
     val WriteHit_st1        = Output(Bool())
+    val flushIdle           = Output(Bool())
 
     //st2
     val dA_data        = Input(Vec(BlockWords, UInt(WordLength.W)))
@@ -154,8 +160,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   Control.io.opcode := io.CoreReq.bits.opcode
   Control.io.param  := io.CoreReq.bits.param
 
-  val BlockAddr_st0 = Cat(io.CoreReq.bits.tag, io.CoreReq.bits.setIdx)
-  val BlockAddr_st1 = Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx)
+  val activeSetIdx_st0 = io.CoreReq.bits.blockAddr(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+  val activeSetIdx_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Req.blockAddr(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+  val BlockAddr_st0 = io.CoreReq.bits.blockAddr
+  val BlockAddr_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Req.blockAddr
   val refillSameBlock_st0 =
     io.refillWrite_valid &&
       (io.refillWrite_blockAddr === BlockAddr_st0) &&
@@ -172,7 +180,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   if(MMU_ENABLED){
     io.probeAsid.get :=io.CoreReq.bits.asid.get
   }
-  io.Probe_tA.setIdx := io.CoreReq.bits.setIdx
+  io.Probe_tA.setIdx := activeSetIdx_st0
   io.Req_st0_RTAB.bits.CoreReqData := io.CoreReq.bits
   io.Req_st0_RTAB.bits.ReqType     := DontCare
   io.Req_st0_RTAB.bits.mshrIdx     := DontCare
@@ -298,7 +306,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreReq_pipeReg_st0_st1.enq.bits.fromReplay := io.reqSource
   //=== st1 ===
 
-  io.tagFromCore_tA_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Req.tag // check the tag from core with tag from tA block
+  io.tagFromCore_tA_st1 := BlockAddr_st1 // check the full block address from core with tag from tA block
   if(MMU_ENABLED){
     io.asidFromCore_tA_st1.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
   }
@@ -306,7 +314,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val fromReplay_st1 = CoreReq_pipeReg_st0_st1.deq.bits.fromReplay
-  io.read_Req_dA.bits.foreach(_.setIdx := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
+  io.read_Req_dA.bits.foreach(_.setIdx := Cat(activeSetIdx_st1,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
   when(flushDirtyReq_st0){
     io.read_Req_dA.bits.foreach(_.setIdx := Cat(io.tA_dirtySetIdx_st0,OHToUInt(io.tA_dirtyWayMask_st0)))
   }
@@ -397,7 +405,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // 因此 write miss 在这里先把主体字段整理好，a_source 仅作为占位。
   // cache miss mem Req
   missMemReq_st1.a_opcode := OpcodeGen.io.memReq_a_opcode
-  missMemReq_st1.a_addr.get := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
+  missMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
   missMemReq_st1.a_param  := OpcodeGen.io.memReq_a_param
   missMemReq_st1.a_data := addrGen.io.dataOut
   missMemReq_st1.hasCoreRsp := Control_st1.isWrite
@@ -433,7 +441,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // live 信号继续推进，导致 holding 中的 writeback 的 (a_addr, a_data) 不再属于
   // 同一条 dirty cacheline，最终把别的 line（甚至全 0）写回 PMEM。
   // 同 gaussian fix #6 ReadHit snapshot 的形态，扩展到 flush 写回路径。
-  val fluInvLiveAddr = Cat(io.tA_dirtyTag_st1, dirtySetIdx_st1, 0.U((WordLength - TagBits - SetIdxBits).W))
+  val fluInvLiveAddr = Cat(io.tA_dirtyTag_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
   val fluInvSnapData = Reg(Vec(BlockWords, UInt(WordLength.W)))
   val fluInvSnapAddr = Reg(UInt(WordLength.W))
   val fluInvSnapValid = RegInit(false.B)
@@ -461,7 +469,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // uncache hit dirty cacheline evict request
   evictMemReq_st1.a_opcode := TLAOp_PutFull
   evictMemReq_st1.a_param  := 0.U
-  evictMemReq_st1.a_addr.get := Cat(CoreReq_pipeReg_st0_st1.deq.bits.Req.tag, CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx, 0.U((WordLength - TagBits - SetIdxBits).W))
+  evictMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
   evictMemReq_st1.a_data := io.dA_data
   evictMemReq_st1.hasCoreRsp := false.B
   evictMemReq_st1.a_source := DontCare
@@ -588,15 +596,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   getBankEn.io.perLaneValid :=  CoreReq_pipeReg_st0_st1.deq.bits.Req.perLaneAddr.map(_.activeMask)
 
   // ******      dataAccess write hit      ******
-  val DataAccessWriteHitSRAMWReq: Vec[SRAMBundleAW[UInt]] = Wire(Vec(BlockWords,new SRAMBundleAW(UInt(8.W), NSets*NWays, BytesOfWord)))
+  val DataAccessWriteHitSRAMWReq: Vec[SRAMBundleAW[UInt]] = Wire(Vec(BlockWords,new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
   //this setIdx = setIdx + wayIdx
-  DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat( CoreReq_pipeReg_st0_st1.deq.bits.Req.setIdx,OHToUInt(io.tA_Hit_st1.waymask)))
+  DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat(activeSetIdx_st1,OHToUInt(io.tA_Hit_st1.waymask)))
   for (i <- 0 until BlockWords){
     DataAccessWriteHitSRAMWReq(i).waymask.get := addrGen.io.MaskOut(i)
     io.WriteReq_dA_valid(i) := addrGen.io.MaskOut(i).orR
     DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
   }
   io.WriteReq_dA := DataAccessWriteHitSRAMWReq
+  io.flushIdle := (FlushInvstateReg === idle) && !FluInvRspPendingReg
   //st1 valid: enqueue st1 st2 pipe reg for coreRsp
   // indicating coreRsp is valid from core Req
   // case: regular read/write hit, uncached read hit, uncache write hit undirty, flush invalidate complete

@@ -39,6 +39,7 @@ class DCacheCoreReq_np extends Bundle{
 //  val isWrite = Bool()
   val tag = UInt(dcache_TagBits.W)
   val setIdx = UInt(dcache_SetIdxBits.W)
+  val blockAddr = UInt((xLen - dcache_BlockOffsetBits - dcache_WordOffsetBits).W)
   val asid = if(MMU_ENABLED) Some(UInt(asidLen.W)) else None
   val perLaneAddr = Vec(num_thread, new DCachePerLaneAddr)
   val data = Vec(num_thread, UInt(xLen.W))
@@ -69,6 +70,7 @@ class ShareMemCoreReq_np extends Bundle{
   val isWrite = Bool()//Vec(NLanes, Bool())
   //val tag = UInt(dcache_TagBits.W)
   val setIdx = UInt(log2Ceil(sharedmem_depth).W)
+  val smemBankCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W)
   val perLaneAddr = Vec(num_thread, new ShareMemPerLaneAddr_np)
   val data = Vec(num_thread, UInt(xLen.W))
 }
@@ -118,6 +120,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
     val csr_numw = Input(UInt(xLen.W))
     val csr_numt = Input(UInt(xLen.W))
     val csr_tid = Input(UInt(xLen.W))
+    val csr_smem_size = Input(UInt(xLen.W))
     val to_mshr = DecoupledIO(new Bundle{
       val tag = new MshrTag
     })
@@ -165,7 +168,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
                     reg_save.in1(0) + reg_save.in2(0)
                   )
                 )
-    is_shared(x) := !reg_save.mask(x) || ( addr(x) >= LDS_BASE.U(32.W) && addr(x) < (LDS_BASE.U(32.W) + sharedmemory_maxsize) )
+    is_shared(x) := !reg_save.mask(x) || ( addr(x) >= LDS_BASE.U(32.W) && addr(x) < (LDS_BASE.U(32.W) + io.csr_smem_size) )
   })
   all_shared := Mux(reg_save.ctrl.isvec,
     is_shared.asUInt.andR, // "AND" Reduce
@@ -175,13 +178,18 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   addr_wire:=addr(PriorityEncoder(reg_save.mask.asUInt))
   val tag = Mux(reg_save.mask.asUInt=/=0.U, addr_wire(xLen-1, xLen-1-dcache_TagBits+1), 0.U(dcache_TagBits.W))
   val setIdx = Mux(reg_save.mask.asUInt=/=0.U, addr_wire(xLen-1-dcache_TagBits, xLen-1-dcache_TagBits-dcache_SetIdxBits+1), 0.U(dcache_SetIdxBits.W))
+  val blockAddr = Mux(
+    reg_save.mask.asUInt =/= 0.U,
+    addr_wire(xLen - 1, dcache_BlockOffsetBits + dcache_WordOffsetBits),
+    0.U((xLen - dcache_BlockOffsetBits - dcache_WordOffsetBits).W)
+  )
   val setIdx_shared = Mux(reg_save.mask.asUInt=/=0.U, 
                         addr_wire(log2Ceil(sharedmem_depth) + dcache_BlockOffsetBits + dcache_WordOffsetBits - 1, 
                                   dcache_BlockOffsetBits + dcache_WordOffsetBits), 
                         0.U)
   val same_tag = Wire(Vec(num_thread, Bool()))
     (0 until num_thread).foreach( x =>
-      same_tag(x) := Mux(reg_save.mask(x), addr(x)(xLen-1, xLen-1-dcache_TagBits-dcache_SetIdxBits+1)===Cat(tag, setIdx), false.B)
+      same_tag(x) := Mux(reg_save.mask(x), addr(x)(xLen-1, dcache_BlockOffsetBits + dcache_WordOffsetBits)===blockAddr, false.B)
     )
   val blockOffset = Wire(Vec(num_thread, UInt(dcache_BlockOffsetBits.W)))
   (0 until num_thread).foreach( x => blockOffset(x) := addr(x)(10, 2) )
@@ -223,6 +231,8 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   //io.to_shared.bits.tag := tag
   io.to_shared.bits.setIdx := setIdx_shared
+  io.to_shared.bits.smemBankCount :=
+    io.csr_smem_size >> log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES)
   (0 until num_thread).foreach(x => {
     io.to_shared.bits.perLaneAddr(x).blockOffset := blockOffset(x)
     io.to_shared.bits.perLaneAddr(x).wordOffset1H := wordOffset1H(x)
@@ -241,6 +251,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   io.to_dcache.bits.tag := tag
   io.to_dcache.bits.setIdx := setIdx
+  io.to_dcache.bits.blockAddr := blockAddr
   io.to_dcache.bits.spike_info.foreach{ left =>
     left.pc := reg_save.ctrl.pc
     left.vaddr := addr_wire
@@ -554,6 +565,7 @@ class LSUexe() extends Module{
     val csr_numw = Input(UInt(xLen.W))
     val csr_numt = Input(UInt(xLen.W))
     val csr_tid = Input(UInt(xLen.W))
+    val csr_smem_size = Input(UInt(xLen.W))
   })
   val sharedmemory_addr_max = sharemem_size.U(32.W)
   //val sharedmemory = Module(new SharedMemoryV2(nSharedMemoryEntry, num_thread, xLen, lsu_nMshrEntry)) // default: 128
@@ -593,6 +605,7 @@ class LSUexe() extends Module{
   AddrCalc.io.csr_pds:=io.csr_pds
   AddrCalc.io.csr_numw:=io.csr_numw
   AddrCalc.io.csr_numt:=io.csr_numt
+  AddrCalc.io.csr_smem_size:=io.csr_smem_size
 }
 
 class ShiftBoard(val depth:Int) extends Module{

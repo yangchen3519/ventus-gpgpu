@@ -1,12 +1,115 @@
 #include "kernel.hpp"
+#include <algorithm>
 #include <cassert>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
 #include <memory>
 #include <spdlog/logger.h>
+#include <stdexcept>
 #include <string>
 #include <vector>
+
+namespace {
+
+uint64_t divRoundUp(uint64_t value, uint64_t divisor) {
+    if (divisor == 0) {
+        throw std::runtime_error("invalid zero divisor for L1 partition calculation");
+    }
+    return value / divisor + (value % divisor != 0);
+}
+
+bool getRtlParam(const char* name, uint64_t& out) {
+    uint32_t value = 0;
+    if (ventus_rtlsim_get_parameter(name, &value) != 0 || value == 0) {
+        return false;
+    }
+    out = value;
+    return true;
+}
+
+uint64_t getRtlParamOrDefault(const char* name, uint64_t fallback) {
+    uint64_t value = 0;
+    return getRtlParam(name, value) ? value : fallback;
+}
+
+uint64_t chooseL1dBankCount(uint64_t maxL1dBanks, uint64_t minL1dBanks,
+                            uint64_t l1dBankGranularity, uint64_t l1dMaxSets) {
+    static constexpr uint64_t kLegalL1dBankCounts[] = {64, 128, 256, 512, 1024};
+    uint64_t best = 0;
+    for (uint64_t candidate : kLegalL1dBankCounts) {
+        if (candidate < minL1dBanks || candidate > maxL1dBanks) {
+            continue;
+        }
+        if (candidate % l1dBankGranularity != 0) {
+            continue;
+        }
+        if (candidate / l1dBankGranularity > l1dMaxSets) {
+            continue;
+        }
+        best = std::max(best, candidate);
+    }
+    return best;
+}
+
+void assignL1PartitionMetadata(metadata_t& metadata) {
+    const uint64_t bankBytes = getRtlParamOrDefault("unified_l1_partition_bank_bytes", 128);
+    uint64_t localMemSize = 128 * 1024;
+    getRtlParam("sharemem_size", localMemSize);
+    const uint64_t totalBanks =
+        getRtlParamOrDefault("unified_l1_partition_banks", localMemSize / bankBytes + 64);
+    const uint64_t minL1dBanks = getRtlParamOrDefault("unified_l1_min_l1d_banks", 64);
+    const uint64_t l1dBankGranularity =
+        getRtlParamOrDefault("unified_l1_l1d_bank_granularity", 2);
+    const uint64_t l1dMaxSets = getRtlParamOrDefault("dcache_NSets_max", 512);
+    const uint64_t maxWgSlotPerSm = getRtlParamOrDefault("num_block", 8);
+    const uint64_t totalWarpsPerSm = getRtlParamOrDefault("num_warp", 8);
+    const uint64_t totalSgpr =
+        getRtlParamOrDefault("num_sgpr", totalWarpsPerSm * 256);
+    const uint64_t totalVgpr =
+        getRtlParamOrDefault("num_vgpr", totalWarpsPerSm * 128);
+
+    metadata.ldsBankCount = divRoundUp(metadata.ldsSize, bankBytes);
+    if (totalBanks <= minL1dBanks) {
+        throw std::runtime_error("invalid unified L1 partition capacity");
+    }
+    if (metadata.ldsBankCount > totalBanks - minL1dBanks) {
+        throw std::runtime_error("kernel LDS exceeds unified L1 SMEM capacity");
+    }
+
+    uint64_t residentWgPerSm = maxWgSlotPerSm;
+    if (metadata.wg_size != 0) {
+        residentWgPerSm = std::min(residentWgPerSm, totalWarpsPerSm / metadata.wg_size);
+    }
+
+    const uint64_t sgprPerWg = metadata.wg_size * metadata.sgprUsage;
+    const uint64_t vgprPerWg = metadata.wg_size * metadata.vgprUsage;
+    if (sgprPerWg != 0) {
+        residentWgPerSm = std::min(residentWgPerSm, totalSgpr / sgprPerWg);
+    }
+    if (vgprPerWg != 0) {
+        residentWgPerSm = std::min(residentWgPerSm, totalVgpr / vgprPerWg);
+    }
+
+    while (residentWgPerSm > 0) {
+        const uint64_t requiredSmemBanks =
+            divRoundUp(residentWgPerSm * metadata.ldsSize, bankBytes);
+        if (requiredSmemBanks <= totalBanks) {
+            const uint64_t l1dBanks =
+                chooseL1dBankCount(totalBanks - requiredSmemBanks, minL1dBanks,
+                                   l1dBankGranularity, l1dMaxSets);
+            if (l1dBanks != 0) {
+                metadata.smemBankCountPerSm = totalBanks - l1dBanks;
+                return;
+            }
+        }
+        residentWgPerSm--;
+    }
+
+    throw std::runtime_error("failed to choose unified L1 partition for kernel metadata");
+}
+
+} // namespace
 
 static void increment_x_then_y_then_z(dim3_t& i, const dim3_t& bound) {
     i.x++;
@@ -169,6 +272,7 @@ void Kernel::assignMetadata(const std::vector<uint64_t>& metadata, metadata_t& m
     mtd.sgprUsage = metadata[index++];
     mtd.vgprUsage = metadata[index++];
     mtd.pdsBaseAddr = metadata[index++];
+    assignL1PartitionMetadata(mtd);
     mtd.num_buffer = metadata[index++];
 
     mtd.buffer_base = new uint64_t[mtd.num_buffer];

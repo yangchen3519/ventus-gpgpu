@@ -8,6 +8,7 @@ import pipeline.{CTAreqData, CTArspData, CTA2warp, pipe}
 import pipeline.{ICachePipeReq_np, ICachePipeRsp_np, DCacheCoreReq_np, DCacheCoreRsp_np}
 import pipeline.{InstClassPerfCounters, PipelinePerfCounters}
 import L1Cache.ShareMem.SharedMemory
+import L1Cache.UnifiedL1.UnifiedDataArray
 import chisel3.experimental.hierarchy.{Definition, Instance, instantiable, public, Instantiate}
 import config.config.Parameters
 import gvm._
@@ -35,7 +36,24 @@ class SM_wrapper_nocache() extends Module {
   })
 
   val cta2warp = Module(new CTA2warp)
-  cta2warp.io.CTAreq :<>= io.CTAreq
+  val activeSmemBanks = RegInit(sharedmem_depth.U(log2Ceil(unified_l1_partition_banks + 1).W))
+  val activeWarpCount = RegInit(0.U(log2Ceil(num_warp + 1).W))
+  val smIdle = activeWarpCount === 0.U
+  val requestedSmemBanks = Mux(
+    io.CTAreq.bits.dispatch2cu_smem_bank_count === 0.U,
+    sharedmem_depth.U,
+    io.CTAreq.bits.dispatch2cu_smem_bank_count
+  )
+  val pendingSmemBanks = Reg(UInt(log2Ceil(unified_l1_partition_banks + 1).W))
+  val switchIdle :: switchUpdate :: Nil = Enum(2)
+  val partitionSwitchState = RegInit(switchIdle)
+  val partitionSwitchBusy = partitionSwitchState =/= switchIdle
+  val partitionSwitchReq = io.CTAreq.valid && smIdle && (requestedSmemBanks =/= activeSmemBanks)
+  val partitionMatches = requestedSmemBanks === activeSmemBanks
+  val canAcceptPartition = partitionMatches && !partitionSwitchBusy
+  cta2warp.io.CTAreq.valid := io.CTAreq.valid && canAcceptPartition
+  cta2warp.io.CTAreq.bits := io.CTAreq.bits
+  io.CTAreq.ready := cta2warp.io.CTAreq.ready && canAcceptPartition
   io.CTArsp :<>= cta2warp.io.CTArsp
 
   val pipe = Module(new pipe())
@@ -51,14 +69,39 @@ class SM_wrapper_nocache() extends Module {
 
   pipe.io.warpReq :<>= cta2warp.io.warpReq
   cta2warp.io.warpRsp :<>= pipe.io.warpRsp
+  val warpReqFire = cta2warp.io.warpReq.fire
+  val warpRspFire = cta2warp.io.warpRsp.fire
+  when(warpReqFire && !warpRspFire) {
+    activeWarpCount := activeWarpCount + 1.U
+  }.elsewhen(!warpReqFire && warpRspFire) {
+    activeWarpCount := activeWarpCount - 1.U
+  }
+  when(partitionSwitchReq && partitionSwitchState === switchIdle) {
+    pendingSmemBanks := requestedSmemBanks
+    partitionSwitchState := switchUpdate
+  }.elsewhen(partitionSwitchState === switchUpdate) {
+    activeSmemBanks := pendingSmemBanks
+    partitionSwitchState := switchIdle
+  }
+  when(io.CTAreq.valid && !canAcceptPartition) {
+    assert(smIdle || partitionMatches, "Busy SM received dispatch with mismatched SMEM partition")
+  }
   cta2warp.io.wg_id_lookup := pipe.io.wg_id_lookup
   pipe.io.wg_id_tag:=cta2warp.io.wg_id_tag
 
   val sharedmem = Module(new SharedMemory()(param))
+  val unifiedDataArray = Module(new UnifiedDataArray)
+  unifiedDataArray.io.dcacheReadReq.valid := false.B
+  unifiedDataArray.io.dcacheReadReq.bits := DontCare
+  unifiedDataArray.io.dcacheWriteReq.valid := false.B
+  unifiedDataArray.io.dcacheWriteReq.bits := DontCare
+  unifiedDataArray.io.smemReq <> sharedmem.io.dataArrayReq
+  sharedmem.io.dataArrayResp <> unifiedDataArray.io.smemResp
   sharedmem.io.coreReq.bits.data:=pipe.io.shared_req.bits.data
   sharedmem.io.coreReq.bits.instrId:=pipe.io.shared_req.bits.instrId
   sharedmem.io.coreReq.bits.isWrite:=pipe.io.shared_req.bits.isWrite
   sharedmem.io.coreReq.bits.setIdx:=pipe.io.shared_req.bits.setIdx
+  sharedmem.io.coreReq.bits.smemBankCount:=activeSmemBanks
   sharedmem.io.coreReq.bits.perLaneAddr:=pipe.io.shared_req.bits.perLaneAddr
   sharedmem.io.coreReq.valid:=pipe.io.shared_req.valid
   pipe.io.shared_req.ready:=sharedmem.io.coreReq.ready

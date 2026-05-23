@@ -12,12 +12,13 @@ package L1Cache.DCache
 
 import L1Cache.DCache.DCacheParameters._
 import L1Cache._
+import L1Cache.UnifiedL1.{UnifiedDCacheReadReq, UnifiedDCacheReadResp, UnifiedDCacheWriteReq}
 import SRAMTemplate._
 import chisel3._
 import chisel3.util._
 import config.config.Parameters
 import firrtl.Utils._
-import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_WordOffsetBits, num_block, num_thread}
+import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_NSets_max, dcache_NWays, dcache_SetIdxBits, dcache_TagBits, dcache_WordOffsetBits, num_block, num_thread, sharedmem_depth, unified_l1_partition_banks}
 import mmu.SV32.{asidLen, paLen, vaLen}
 import top.parameters.DCACHE_DEBUG
 import scala.tools.nsc.interpreter.Repl
@@ -54,6 +55,10 @@ class DCachePerfCounters extends Bundle {
 }
 
 class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extends DCacheModule{
+  private val MaxSets = dcache_NSets_max
+  private val MaxSetIdxBits = log2Ceil(MaxSets)
+  private val MaxDataSets = MaxSets * dcache_NWays
+
   val io = IO(new Bundle{
     val coreReq = Flipped(DecoupledIO(new DCacheCoreReq(SV)))
     val coreRsp = DecoupledIO(new DCacheCoreRsp)
@@ -64,24 +69,20 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     val perfEnable = Input(Bool())
     val perfReset = Input(Bool())
     val perf = Output(new DCachePerfCounters)
+    val activeSmemBanks = Input(UInt(log2Ceil(unified_l1_partition_banks + 1).W))
+    val partitionFlushReq = Input(Bool())
+    val partitionFlushDone = Output(Bool())
+    val cacheIdle = Output(Bool())
+    val dataArrayReadReq = Decoupled(new UnifiedDCacheReadReq)
+    val dataArrayReadResp = Flipped(Valid(new UnifiedDCacheReadResp))
+    val dataArrayWriteReq = Decoupled(new UnifiedDCacheWriteReq)
   })
   // submodules
-  val TagAccess = Module(new L1TagAccess(set=NSets, way=NWays, tagBits=TagBits,AsidBits = asidLen,readOnly=false))
+  val TagAccess = Module(new L1TagAccess(set=MaxSets, way=NWays, tagBits=bABits,AsidBits = asidLen,readOnly=false))
   val WshrAccess = Module(new DCacheWSHR(Depth = NWshrEntry))
   val ReplayTable = Module(new L1RTAB())
   val MshrAccess = Module(new MSHR(bABits = bABits, tIWidth = tIBits, WIdBits = WIdBits, NMshrEntry, NMshrSubEntry, asidLen))
   val SMshrAccess = Module(new SpecialMSHR(bABits = bABits, tIWidth = tIBits, WIdBits = WIdBits, NMshrEntry, asidLen))
-  val DataAccesses = Seq.tabulate(BlockWords) { i =>
-    Module(new SRAMTemplate(
-      gen=UInt(8.W),
-      set=NSets*NWays,
-      way=BytesOfWord,
-      shouldReset = false,
-      holdRead = false,
-      singlePort = false,
-      bypassWrite = true
-    ))
-  }
     // pipelines
   val coreReqPipe = Module(new CoreReqPipe)
   val memRspPipe = Module(new MemRspPipe)
@@ -90,6 +91,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val RTAB_pushedIdx_st2 = Module(new Queue(UInt(NRTABs.W),entries = 8,flow=false,pipe=false))
   val MemReqArb = Module(new Arbiter(new WshrMemReqV2, 2))
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
+  val partitionFlushReq = Wire(Decoupled(new DCacheCoreReq))
   val dirtyReplaceMemReq = Wire(new WshrMemReqV2)
   val coreWriteHitFire = coreReqPipe.io.st1_valid && coreReqPipe.io.st1_ready && coreReqPipe.io.WriteHit_st1
   val totalReqCnt = RegInit(0.U(64.W))
@@ -110,16 +112,95 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val bankConflictCyclesCnt = RegInit(0.U(64.W))
   val coreReqPipePipelinedCnt = RegInit(0.U(64.W))
   val memRspPipeDecoupledCnt  = RegInit(0.U(64.W))
-  for(i <- 0 until BlockWords){
-    DataAccesses(i).io.r.req.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
-    DataAccesses(i).io.r.req.bits := Mux(memRspPipe.io.dAReplace_rReq_valid,
-      memRspPipe.io.dAReplace_rReq(i), coreReqPipe.io.read_Req_dA.bits(i))
-    DataAccesses(i).io.w.req.valid := (coreWriteHitFire && coreReqPipe.io.WriteReq_dA_valid(i)) || memRspPipe.io.dAmemRsp_wReq_valid
-    DataAccesses(i).io.w.req.bits := Mux(memRspPipe.io.dAmemRsp_wReq_valid,
-      memRspPipe.io.dAmemRsp_wReq(i), coreReqPipe.io.WriteReq_dA(i))
+  val partitionFlushActive = RegInit(false.B)
+  val partitionFlushIssued = RegInit(false.B)
+  val partitionFlushRspPending = RegInit(false.B)
+  val partitionFlushDonePulse = Wire(Bool())
+  val memReqLaunchValid = Wire(Bool())
+  val dcacheSafeToIssuePartitionFlush =
+    !coreReqPipe.io.st1_valid &&
+      !memRspPipe.io.dAmemRsp_wReq_valid &&
+      !memRspPipe.io.dAReplace_rReq_valid &&
+      !memRspPipe.io.memReq_valid &&
+      !memRspPipe.io.blockCoreReq &&
+      coreReqPipe.io.flushIdle &&
+      MshrAccess.io.empty &&
+      SMshrAccess.io.empty &&
+      WshrAccess.io.empty &&
+      ReplayTable.io.RTAB_empty &&
+      !memRsp_Q.io.deq.valid &&
+      !memReq_Q.io.deq.valid &&
+      !memReqLaunchValid
+  val dcachePipelineIdle =
+    !coreReqPipe.io.st0_valid &&
+      !coreReqPipe.io.st1_valid &&
+      !memRspPipe.io.dAmemRsp_wReq_valid &&
+      !memRspPipe.io.dAReplace_rReq_valid &&
+      !memRspPipe.io.memReq_valid &&
+      !memRspPipe.io.blockCoreReq &&
+      coreReqPipe.io.flushIdle &&
+      MshrAccess.io.empty &&
+      SMshrAccess.io.empty &&
+      WshrAccess.io.empty &&
+      ReplayTable.io.RTAB_empty &&
+      !memRsp_Q.io.deq.valid &&
+      !memReq_Q.io.deq.valid &&
+      !memReqLaunchValid
+  io.cacheIdle := dcachePipelineIdle && !partitionFlushActive && !partitionFlushRspPending
+  partitionFlushDonePulse := partitionFlushActive && partitionFlushIssued && dcachePipelineIdle && !partitionFlushRspPending
+  io.partitionFlushDone := partitionFlushDonePulse
+  when(io.partitionFlushReq && !partitionFlushActive){
+    partitionFlushActive := true.B
+    partitionFlushIssued := false.B
+    partitionFlushRspPending := false.B
   }
-  val DataAccessRRsp = DataAccesses.map(d => d.io.r.resp.data)
-  val DataAccessReadSRAMRRsp = DataAccessRRsp.map(d => Cat(d.reverse))
+  when(partitionFlushDonePulse){
+    partitionFlushActive := false.B
+    partitionFlushIssued := false.B
+  }
+  when(partitionFlushReq.fire){
+    partitionFlushIssued := true.B
+    partitionFlushRspPending := true.B
+  }
+  val activeL1DBanks = unified_l1_partition_banks.U - io.activeSmemBanks
+  val activeL1DSets = activeL1DBanks >> WayIdxBits
+  val activeL1DSetMask = activeL1DSets(MaxSetIdxBits - 1, 0) - 1.U
+  def dataArrayPhysicalSlot(oldDataIdx: UInt): UInt = {
+    val setIdx = oldDataIdx >> WayIdxBits
+    val wayIdx = oldDataIdx(WayIdxBits - 1, 0)
+    (io.activeSmemBanks + wayIdx * activeL1DSets + setIdx)(log2Ceil(unified_l1_partition_banks) - 1, 0)
+  }
+  assert(activeL1DBanks >= (dcache_NSets * dcache_NWays).U,
+    "DCache active L1D bank count is below minimum supported capacity")
+  assert(activeL1DBanks <= (dcache_NSets_max * dcache_NWays).U,
+    "DCache active L1D data slot range exceeds unified data array")
+  assert(activeL1DSets >= dcache_NSets.U && activeL1DSets <= dcache_NSets_max.U && PopCount(activeL1DSets) === 1.U,
+    "DCache active L1D set count must be a power-of-two within supported range")
+  val dataReadOldIdx = Mux(memRspPipe.io.dAReplace_rReq_valid,
+    memRspPipe.io.dAReplace_rReq(0).setIdx,
+    coreReqPipe.io.read_Req_dA.bits(0).setIdx)
+  io.dataArrayReadReq.valid := coreReqPipe.io.read_Req_dA.valid || memRspPipe.io.dAReplace_rReq_valid
+  io.dataArrayReadReq.bits.physicalSlot := dataArrayPhysicalSlot(dataReadOldIdx)
+
+  val coreWriteHitValid = coreWriteHitFire && coreReqPipe.io.WriteReq_dA_valid.asUInt.orR
+  val dataWriteOldIdx = Mux(memRspPipe.io.dAmemRsp_wReq_valid,
+    memRspPipe.io.dAmemRsp_wReq(0).setIdx,
+    coreReqPipe.io.WriteReq_dA(0).setIdx)
+  io.dataArrayWriteReq.valid := memRspPipe.io.dAmemRsp_wReq_valid || coreWriteHitValid
+  io.dataArrayWriteReq.bits.physicalSlot := dataArrayPhysicalSlot(dataWriteOldIdx)
+  for(i <- 0 until BlockWords){
+    val writeReq = Mux(memRspPipe.io.dAmemRsp_wReq_valid,
+      memRspPipe.io.dAmemRsp_wReq(i), coreReqPipe.io.WriteReq_dA(i))
+    io.dataArrayWriteReq.bits.data(i) := Cat(writeReq.data.reverse)
+    io.dataArrayWriteReq.bits.mask(i) := Mux(
+      memRspPipe.io.dAmemRsp_wReq_valid || (coreWriteHitFire && coreReqPipe.io.WriteReq_dA_valid(i)),
+      writeReq.waymask.get,
+      0.U(BytesOfWord.W)
+    )
+  }
+  assert(io.dataArrayReadReq.ready, "UnifiedDataArray DCache read port must be always-ready in phase-1")
+  assert(io.dataArrayWriteReq.ready, "UnifiedDataArray DCache write port must be always-ready in phase-1")
+  val DataAccessReadSRAMRRsp = io.dataArrayReadResp.bits.data
   val replaceMemReqFire = Wire(Bool())
   val perfBankEn = Module(new getDataAccessBankEn(NBank = BlockWords, NLane = NLanes))
   val replaceReadResp = RegNext(memRspPipe.io.dAReplace_rReq_valid, false.B)
@@ -127,7 +208,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val replaceDataReg = Reg(Vec(BlockWords, UInt(WordLength.W)))
   val replaceAddrReg = Reg(UInt(WordLength.W))
   when(replaceReadResp){
-    replaceDataReg := VecInit(DataAccessReadSRAMRRsp)
+    replaceDataReg := DataAccessReadSRAMRRsp
     replaceAddrReg := RegNext(TagAccess.io.a_addrReplacement_st1.get)
     replaceDataValid := true.B
   }
@@ -147,13 +228,24 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // 导致同一条外部请求被重复注入 st0。
   // 另外：当 RTAB 仅剩 1 个空位（almost_full）且本拍 st1 仍会向 RTAB 入队时，也要拉低 ready，
   // 否则可能出现“本拍占掉最后一个空位 + 同拍再接收下一条 coreReq，下一拍该 coreReq 也要入 RTAB -> 溢出”的情况。
+  partitionFlushReq.valid := partitionFlushActive && !partitionFlushIssued && dcacheSafeToIssuePartitionFlush
+  partitionFlushReq.bits := 0.U.asTypeOf(new DCacheCoreReq(SV))
+  partitionFlushReq.bits.opcode := 3.U
+  // Partition switching only needs local dirty writeback + local invalidate.
+  // Do not send an L2 invalidate hint for a private L1D partition change.
+  partitionFlushReq.bits.param := 3.U
+  partitionFlushReq.bits.perLaneAddr.foreach(_.activeMask := false.B)
+
   val allowIn1 =
     !ReplayTable.io.RTAB_full &&
       !(ReplayTable.io.RTAB_almost_full && coreReqPipe.io.Req_st1_RTAB.valid) &&
-      !blockCoreReq
-  CoreReqArb.io.in(1).valid := io.coreReq.valid && allowIn1
-  CoreReqArb.io.in(1).bits  := io.coreReq.bits
-  io.coreReq.ready := CoreReqArb.io.in(1).ready && allowIn1
+      !blockCoreReq &&
+      !(partitionFlushActive && partitionFlushIssued)
+  val allowExternalCoreReq = allowIn1 && !io.partitionFlushReq
+  CoreReqArb.io.in(1).valid := (partitionFlushReq.valid || (io.coreReq.valid && allowExternalCoreReq)) && allowIn1
+  CoreReqArb.io.in(1).bits  := Mux(partitionFlushReq.valid, partitionFlushReq.bits, io.coreReq.bits)
+  partitionFlushReq.ready := CoreReqArb.io.in(1).ready && allowIn1
+  io.coreReq.ready := CoreReqArb.io.in(1).ready && allowExternalCoreReq && !partitionFlushReq.valid
   //---------coreReqPipe input connection------------
   // st0
   coreReqPipe.io.CoreReq                <> CoreReqArb.io.out
@@ -169,6 +261,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.blockCoreReq           := blockCoreReq
   coreReqPipe.io.refillWrite_valid      := memRspPipe.io.dAmemRsp_wReq_valid
   coreReqPipe.io.refillWrite_blockAddr  := memRspPipe.io.dAmemRsp_wReq_blockAddr
+  coreReqPipe.io.activeL1DSetMask       := activeL1DSetMask
   if(MMU_ENABLED){
     coreReqPipe.io.refillWrite_asid.get := memRspPipe.io.dAmemRsp_wReq_asid.get
   }
@@ -187,7 +280,13 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.SMSHR_ProbeStatus := SMshrAccess.io.probeOut_st1
   coreReqPipe.io.WSHR_CheckResult  := WshrAccess.io.checkresult
   coreReqPipe.io.Mshr_st1_ready    := MshrAccess.io.missReq.ready
-  coreReqPipe.io.memRsp_coreRsp    <> memRspPipe.io.memRsp_coreRsp
+  coreReqPipe.io.memRsp_coreRsp <> memRspPipe.io.memRsp_coreRsp
+  val coreRspFromCoreReq = coreReqPipe.io.CoreRsp.bits
+  val coreRspIsPartitionFlush =
+    partitionFlushRspPending &&
+      coreReqPipe.io.CoreRsp.valid &&
+      coreRspFromCoreReq.instrId === 0.U &&
+      !coreRspFromCoreReq.activeMask.asUInt.orR
  // st2
   coreReqPipe.io.dA_data          := DataAccessReadSRAMRRsp
   coreReqPipe.io.memRspIsFlu      := memRspPipe.io.memRspIsFlu
@@ -221,7 +320,12 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   MshrAccess.io.stage1_ready  := coreReqPipe.io.st1_ready
   SMshrAccess.io.stage1_ready := coreReqPipe.io.st1_ready
 
-  io.coreRsp <> coreReqPipe.io.CoreRsp
+  io.coreRsp.valid := coreReqPipe.io.CoreRsp.valid && !coreRspIsPartitionFlush
+  io.coreRsp.bits := coreReqPipe.io.CoreRsp.bits
+  coreReqPipe.io.CoreRsp.ready := Mux(coreRspIsPartitionFlush, true.B, io.coreRsp.ready)
+  when(coreRspIsPartitionFlush && coreReqPipe.io.CoreRsp.fire){
+    partitionFlushRspPending := false.B
+  }
 
   // ------memRspPipe input connection------
   memRsp_Q.io.enq <> io.memRsp
@@ -236,6 +340,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   memRspPipe.io.tAWayMask   := TagAccess.io.waymaskReplacement_st1
   memRspPipe.io.needReplace := TagAccess.io.needReplace.get
   memRspPipe.io.memReq_ready := MemReqArb.io.in(0).ready
+  memRspPipe.io.activeL1DSetMask := activeL1DSetMask
 
   //mem Rsp pipe output connection
   TagAccess.io.allocateWrite      <> memRspPipe.io.tAAllocateWriteReq
@@ -261,7 +366,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // memReq_ready
 
   TagAccess.io.allocateWriteTagSRAMWValid_st1 := memRspPipe.io.dAmemRsp_wReq_valid
- TagAccess.io.allocateWriteData_st1 := get_tag(memRspPipe.io.dAmemRsp_wReq_blockAddr)
+ TagAccess.io.allocateWriteData_st1 := memRspPipe.io.dAmemRsp_wReq_blockAddr
   // tag access
   //mshr
   MshrAccess.io.stage2_ready  := MemReqArb.io.in(1).ready
@@ -283,7 +388,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   dirtyReplaceMemReq.a_opcode := 0.U//PutFullData
   dirtyReplaceMemReq.a_param := 0.U//regular write
   dirtyReplaceMemReq.a_source := DontCare//wait for WSHR
-  val replaceDataSel = Mux(replaceDataValid, replaceDataReg, VecInit(DataAccessReadSRAMRRsp))
+  val replaceDataSel = Mux(replaceDataValid, replaceDataReg, DataAccessReadSRAMRRsp)
   val replaceAddrSel = Mux(replaceDataValid, replaceAddrReg, RegNext(TagAccess.io.a_addrReplacement_st1.get))
   dirtyReplaceMemReq.a_addr.get := replaceAddrSel
   if(MMU_ENABLED){
@@ -541,7 +646,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   // FSM for TLB handle and memreq transmit
   // 0-idle 1-wait TLB resp 2-issue memreq
 
-  val memReqSetIdx_st2 = memReq_Q.io.deq.bits.a_addr.get(WordLength - TagBits -1,WordLength - TagBits - SetIdxBits)
+  val memReqSetIdx_st2 = memReq_Q.io.deq.bits.a_addr.get(WordLength - dcache_TagBits - 1, WordLength - dcache_TagBits - dcache_SetIdxBits)
   when(memReqIsWrite_st3 && memReq_Q.io.deq.fire){
     // write miss 的 TL source 要等真正 deq.fire、并拿到 WSHR pushedIdx 后才能最终确定。
     memReq_st3_source := Cat("d0".U, WshrAccess.io.pushedIdx, memReqSetIdx_st2)
@@ -571,6 +676,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   when(memReq_Q.io.deq.fire ^ io.memReq.get.fire){
     memReq_valid := memReq_Q.io.deq.fire
   }
+  memReqLaunchValid := memReq_valid
   io.memReq.get.valid := memReq_valid
   io.perf.totalReq := totalReqCnt
   io.perf.readReq := readReqCnt

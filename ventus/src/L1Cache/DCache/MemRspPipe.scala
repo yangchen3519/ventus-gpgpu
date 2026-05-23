@@ -28,11 +28,15 @@ class memRspPipe_st1(implicit p: Parameters) extends DCacheBundle{
 }
 
 class MemRspPipe(implicit p: Parameters) extends DCacheModule{
+    private val MaxSets = dcache_NSets_max
+    private val MaxSetIdxBits = log2Ceil(MaxSets)
+    private val MaxDataSets = MaxSets * dcache_NWays
+
     val io = IO(new Bundle{
          val memRsp = Flipped(DecoupledIO(new DCacheMemRsp))
          val memRspIsFlu = Output(Bool())
          //st0
-         val tAAllocateWriteReq = ValidIO(new SRAMBundleA(NSets)) // ta allocate write
+         val tAAllocateWriteReq = ValidIO(new SRAMBundleA(MaxSets)) // ta allocate write
          val RTABUpdateReq       = ValidIO(new RTABUpdate) // Update RTAB
          val MSHRMissRsp        = Decoupled(new MSHRmissRspIn(NMshrEntry))
          val SMSHRMissRsp       = Decoupled(new MSHRmissRspIn(NMshrEntry))
@@ -47,12 +51,12 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
          val SMSHRMissRspOut     = Flipped(DecoupledIO(new MSHRmissRspOut(bABits, tIBits, WIdBits, asidLen)))
          val SMSHRMissRspOutAsid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
 
-         val dAmemRsp_wReq         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), NSets * NWays, BytesOfWord)))
+         val dAmemRsp_wReq         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
          val dAmemRsp_wReq_valid   = Output(Bool())
          // dAmemRsp_wReq_valid 拉高时，对应的写回 cacheline blockAddr（tag+set），用于 coreReqPipe 做同拍冲突规避
          val dAmemRsp_wReq_blockAddr = Output(UInt(bABits.W))
          val dAmemRsp_wReq_asid = if(MMU_ENABLED) Some(Output(UInt(asidLen.W))) else None
-         val dAReplace_rReq        = Output(Vec(BlockWords, new SRAMBundleA(NSets * NWays)))
+         val dAReplace_rReq        = Output(Vec(BlockWords, new SRAMBundleA(MaxDataSets)))
          val dAReplace_rReq_valid  = Output(Bool())
          val memReq_valid          = Output(Bool())
          val tAWayMask             = Input(UInt(NWays.W))
@@ -60,6 +64,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
          val memReq_ready          = Input(Bool())
          // dirty replace 期间禁止 core 新请求进入，避免 victim line 仍可 write-hit
          val blockCoreReq          = Output(Bool())
+         val activeL1DSetMask      = Input(UInt(MaxSetIdxBits.W))
 
     })
     // st0
@@ -91,7 +96,9 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     // -----st0-----
     io.memRspIsFlu := memRspisFlushOrInv && io.memRsp.valid
     io.tAAllocateWriteReq.valid := tAAllocateWriteReq_valid
-    io.tAAllocateWriteReq.bits.setIdx := io.memRsp.bits.d_source(SetIdxBits-1,0)
+    val memRspBlockAddr_st0 = get_blockAddr(io.memRsp.bits.d_addr)
+    val memRspActiveSetIdx_st0 = memRspBlockAddr_st0(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+    io.tAAllocateWriteReq.bits.setIdx := memRspActiveSetIdx_st0
     io.MSHRMissRsp.valid := io.memRsp.valid && memRspisRead
     io.MSHRMissRsp.bits.instrId := idx_st0
     io.SMSHRMissRsp.valid := io.memRsp.valid && memRspisSpecial
@@ -99,7 +106,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
 
     io.RTABUpdateReq.bits.mshrIdx := idx_st0
     io.RTABUpdateReq.bits.wshrIdx := idx_st0
-    io.RTABUpdateReq.bits.blockAddr := get_blockAddr(io.memRsp.bits.d_addr)
+    io.RTABUpdateReq.bits.blockAddr := memRspBlockAddr_st0
     io.RTABUpdateReq.bits.updateType := 0.U
     io.RTABUpdateReq.valid := RTABUpdateReq_valid
     io.WSHRPopReq.bits := idx_st0
@@ -183,7 +190,9 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     io.memRsp_coreRsp.bits.readHitSnapshotData := DontCare
     // write to dA sram
     io.dAmemRsp_wReq.foreach(_.waymask.get := Fill(BytesOfWord, true.B))
-    io.dAmemRsp_wReq.foreach(_.setIdx := Cat(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_source(SetIdxBits-1,0),OHToUInt(io.tAWayMask)))
+    val memRspBlockAddr_st1 = get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
+    val memRspActiveSetIdx_st1 = memRspBlockAddr_st1(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+    io.dAmemRsp_wReq.foreach(_.setIdx := Cat(memRspActiveSetIdx_st1,OHToUInt(io.tAWayMask)))
     for (i <- 0 until BlockWords) {
       io.dAmemRsp_wReq(i).data := MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data(i).asTypeOf(Vec(BytesOfWord, UInt(8.W)))
     }
@@ -203,11 +212,11 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
       blockCoreReqReg := false.B
     }
     io.blockCoreReq := blockCoreReqReg || needReplace_pulse
-    val allocateSetIdx_st1 = RegInit(0.U(SetIdxBits.W))
+    val allocateSetIdx_st1 = RegInit(0.U(MaxSetIdxBits.W))
     when(io.tAAllocateWriteReq.valid){
       allocateSetIdx_st1 := io.tAAllocateWriteReq.bits.setIdx
     }
-    val replaceSetIdx = RegInit(0.U(SetIdxBits.W))
+    val replaceSetIdx = RegInit(0.U(MaxSetIdxBits.W))
     val replaceWayMask = RegInit(0.U(NWays.W))
     val replaceSetIdx_eff = Mux(needReplace_pending, replaceSetIdx, allocateSetIdx_st1)
     val replaceWayMask_eff = Mux(needReplace_pending, replaceWayMask, io.tAWayMask)
@@ -256,7 +265,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     }
     MemRsp_pipeReg_st0_st1.deq.ready := st1_ready
     io.dAmemRsp_wReq_valid := dAReq_valid
-    io.dAmemRsp_wReq_blockAddr := get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
+    io.dAmemRsp_wReq_blockAddr := memRspBlockAddr_st1
     if(MMU_ENABLED){
       io.dAmemRsp_wReq_asid.get := missRspAsid_st1.get
     }

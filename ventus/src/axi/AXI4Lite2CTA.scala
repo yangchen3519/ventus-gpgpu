@@ -27,7 +27,7 @@ class AXI4Lite2CTA(val addrWidth:Int, val busWidth:Int) extends Module{
 
 
 
-  val regs = RegInit(VecInit.fill(20)(0.U(busWidth.W)))
+  val regs = RegInit(VecInit.fill(21)(0.U(busWidth.W)))
 
   io.rsp.ready:=false.B
   when(io.rsp.valid& !regs(17)(0)){
@@ -91,6 +91,7 @@ class AXI4Lite2CTA(val addrWidth:Int, val busWidth:Int) extends Module{
   io.data.bits.host_vgpr_size_total:=regs(5)
   io.data.bits.host_sgpr_size_total:=regs(6)
   io.data.bits.host_lds_size_total:=regs(7)
+  io.data.bits.host_smem_bank_count:=regs(20)
   io.data.bits.host_gds_size_total:=0.U
   io.data.bits.host_vgpr_size_per_wf:=regs(8)
   io.data.bits.host_sgpr_size_per_wf:=regs(9)
@@ -233,4 +234,3 @@ class AXIwrapper_test(val addrWidth:Int, val busWidth:Int) extends Module{
   axiAdapter.io.data<>cta_module.io.in
   axiAdapter.io.rsp<>cta_module.io.out
 }
-

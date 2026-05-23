@@ -88,6 +88,7 @@ bool Cta::apply_to_dut(Vdut* dut) {
         dut->io_host_req_bits_host_num_wf = kernel->get_num_wf();
         dut->io_host_req_bits_host_wf_size = kernel->get_num_thread();
         dut->io_host_req_bits_host_lds_size_total = kernel->get_num_lds();
+        dut->io_host_req_bits_host_smem_bank_count = kernel->get_smem_bank_count_per_sm();
         dut->io_host_req_bits_host_sgpr_size_total = kernel->get_num_sgpr_per_wf() * kernel->get_num_wf();
         dut->io_host_req_bits_host_vgpr_size_total = kernel->get_num_vgpr_per_wf() * kernel->get_num_wf();
         dut->io_host_req_bits_host_sgpr_size_per_wf = kernel->get_num_sgpr_per_wf();

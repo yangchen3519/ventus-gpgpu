@@ -302,6 +302,7 @@ class RunCtaTests extends AnyFlatSpec {
         _.num_vgpr -> (test.in.vgpr(i) * test.in.wf(i)).U,
         _.num_lds -> test.in.lds(i).U,
         _.num_wf -> test.in.wf(i).U,
+        _.smem_bank_count -> top.parameters.sharedmem_depth.U,
         _.gds_base -> 0.U,
         _.num_thread_per_wf -> 0.U,
         _.pds_base -> 0.U,
@@ -357,6 +358,7 @@ class RunCtaTests extends AnyFlatSpec {
           dut.io.host_wg_new.bits.num_vgpr.poke((test.in.vgpr(in_cnt) * test.in.wf(in_cnt)).U)
           dut.io.host_wg_new.bits.num_lds.poke(test.in.lds(in_cnt).U)
           dut.io.host_wg_new.bits.num_wf.poke(test.in.wf(in_cnt).U)
+          dut.io.host_wg_new.bits.smem_bank_count.poke(top.parameters.sharedmem_depth.U)
           dut.io.host_wg_new.bits.gds_base.poke(0.U)
           dut.io.host_wg_new.bits.num_thread_per_wf.poke(0.U)
           dut.io.host_wg_new.bits.pds_base.poke(0.U)
