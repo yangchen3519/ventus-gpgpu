@@ -35,8 +35,11 @@ uint64_t getRtlParamOrDefault(const char* name, uint64_t fallback) {
 
 uint64_t chooseL1dBankCount(uint64_t maxL1dBanks, uint64_t minL1dBanks,
                             uint64_t l1dBankGranularity, uint64_t l1dMaxSets) {
-    static constexpr uint64_t kLegalL1dBankCounts[] = {64, 128, 256, 512, 1024};
+    if (l1dBankGranularity == 0 || l1dMaxSets == 0) {
+        return 0;
+    }
     uint64_t best = 0;
+    static constexpr uint64_t kLegalL1dBankCounts[] = {64, 128, 256, 512, 1024};
     for (uint64_t candidate : kLegalL1dBankCounts) {
         if (candidate < minL1dBanks || candidate > maxL1dBanks) {
             continue;
@@ -75,6 +78,9 @@ void assignL1PartitionMetadata(metadata_t& metadata) {
     }
     if (metadata.ldsBankCount > totalBanks - minL1dBanks) {
         throw std::runtime_error("kernel LDS exceeds unified L1 SMEM capacity");
+    }
+    if (metadata.smemBankCountPerSm != 0) {
+        return;
     }
 
     uint64_t residentWgPerSm = maxWgSlotPerSm;
