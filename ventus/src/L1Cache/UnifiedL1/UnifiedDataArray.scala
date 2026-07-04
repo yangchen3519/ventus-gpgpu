@@ -5,7 +5,7 @@ import chisel3.util._
 import top.parameters._
 
 class UnifiedDCacheReadReq extends Bundle {
-  val physicalSlot = UInt(log2Ceil(unified_l1_partition_banks).W)
+  val physicalSlot = UInt(log2Ceil(unified_l1_partition_slots).W)
 }
 
 class UnifiedDCacheReadResp extends Bundle {
@@ -13,13 +13,13 @@ class UnifiedDCacheReadResp extends Bundle {
 }
 
 class UnifiedDCacheWriteReq extends Bundle {
-  val physicalSlot = UInt(log2Ceil(unified_l1_partition_banks).W)
+  val physicalSlot = UInt(log2Ceil(unified_l1_partition_slots).W)
   val data = Vec(dcache_BlockWords, UInt(xLen.W))
   val mask = Vec(dcache_BlockWords, UInt(BytesOfWord.W))
 }
 
 class UnifiedSMemReq extends Bundle {
-  val physicalSlot = UInt(log2Ceil(unified_l1_partition_banks).W)
+  val physicalSlot = UInt(log2Ceil(unified_l1_partition_slots).W)
   val isWrite = Bool()
   val bankEn = Vec(sharedmem_BlockWords, Bool())
   val wdata = Vec(sharedmem_BlockWords, UInt(xLen.W))
@@ -35,7 +35,7 @@ class UnifiedDataArray extends Module {
   require(BytesOfWord == 4)
 
   private val nWords = dcache_BlockWords
-  private val slotBits = log2Ceil(unified_l1_partition_banks)
+  private val slotBits = log2Ceil(unified_l1_partition_slots)
 
   val io = IO(new Bundle {
     val dcacheReadReq = Flipped(Decoupled(new UnifiedDCacheReadReq))
@@ -59,7 +59,7 @@ class UnifiedDataArray extends Module {
   io.smemResp.valid := RegNext(smemReadFire, false.B)
 
   for (word <- 0 until nWords) {
-    val array = SyncReadMem(unified_l1_partition_banks, Vec(BytesOfWord, UInt(8.W)))
+    val array = SyncReadMem(unified_l1_partition_slots, Vec(BytesOfWord, UInt(8.W)))
 
     val dcacheReadBytes = array.read(io.dcacheReadReq.bits.physicalSlot, dcacheReadFire)
     val smemReadBytes = array.read(io.smemReq.bits.physicalSlot, smemReadFire && io.smemReq.bits.bankEn(word))

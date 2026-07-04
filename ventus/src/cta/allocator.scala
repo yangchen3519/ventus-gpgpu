@@ -182,8 +182,8 @@ class allocator extends Module {
   // resource table of WG/WF slot
   val wgslot = RegInit(VecInit.fill(NUM_CU)(0.U(CONFIG.GPU.NUM_WG_SLOT.W)))
   val wfslot = RegInit(VecInit.fill(NUM_CU)(0.U(log2Ceil(CONFIG.GPU.NUM_WF_SLOT+1).W)))
-  val active_smem_bank_count = RegInit(
-    VecInit.fill(NUM_CU)(CONFIG.GPU.UNIFIED_L1_DEFAULT_SMEM_BANKS.U(log2Ceil(CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W))
+  val active_smem_slot_count = RegInit(
+    VecInit.fill(NUM_CU)(CONFIG.GPU.UNIFIED_L1_DEFAULT_SMEM_SLOTS.U(log2Ceil(CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS+1).W))
   )
 
   val wgslot_id = Reg(UInt(log2Ceil(CONFIG.GPU.NUM_WG_SLOT).W)) // generated WG slot ID
@@ -333,16 +333,16 @@ class allocator extends Module {
     val result_line_sgpr = Wire(Vec(NUM_RT_RESULT, Bool()))
     val result_line_vgpr = Wire(Vec(NUM_RT_RESULT, Bool()))
     val cu_idle = wgslot(cuid_idx) === 0.U
-    val effective_smem_bank_count = Mux(cu_idle, wg.smem_bank_count, active_smem_bank_count(cuid_idx))
-    val effective_l1d_bank_count = CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS.U - effective_smem_bank_count
+    val effective_smem_slot_count = Mux(cu_idle, wg.smem_slot_count, active_smem_slot_count(cuid_idx))
+    val effective_l1d_slot_count = CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS.U - effective_smem_slot_count
     val effective_smem_capacity_bytes =
-      effective_smem_bank_count * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+      effective_smem_slot_count * CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES.U
     val smem_partition_legal =
-      effective_smem_bank_count >= CONFIG.GPU.UNIFIED_L1_MIN_SMEM_BANKS.U &&
-      effective_l1d_bank_count >= CONFIG.GPU.UNIFIED_L1_MIN_L1D_BANKS.U &&
-      effective_smem_bank_count <= CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS.U
+      effective_smem_slot_count >= CONFIG.GPU.UNIFIED_L1_MIN_SMEM_SLOTS.U &&
+      effective_l1d_slot_count >= CONFIG.GPU.UNIFIED_L1_MIN_L1D_SLOTS.U &&
+      effective_smem_slot_count <= CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS.U
     val smem_partition_matches_active =
-      cu_idle || (wg.smem_bank_count === active_smem_bank_count(cuid_idx))
+      cu_idle || (wg.smem_slot_count === active_smem_slot_count(cuid_idx))
     val smem_partition_capacity_ok = wg.num_lds <= effective_smem_capacity_bytes
     for(j <- 0 until NUM_RT_RESULT) { // higher rt cache line has higher priority
       val idle_rtcache_size = Mux(j.U === 0.U, effective_smem_capacity_bytes, 0.U)
@@ -394,7 +394,7 @@ class allocator extends Module {
   val cu_tmp = Mux(fsm === FSM.ALLOC && fsm =/= fsm_r1, cu, io.rt_dealloc.bits.cu_id)
   val selected_cu_idle_before_alloc = wgslot(cu) === 0.U
   val selected_smem_capacity_bytes_wide =
-    wg.smem_bank_count * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+    wg.smem_slot_count * CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES.U
   val selected_smem_capacity_bytes = Wire(UInt(log2Ceil(CONFIG.GPU.NUM_LDS+1).W))
   selected_smem_capacity_bytes := Mux(
     selected_smem_capacity_bytes_wide > CONFIG.GPU.NUM_LDS.U,
@@ -402,7 +402,7 @@ class allocator extends Module {
     selected_smem_capacity_bytes_wide
   )
   val active_smem_capacity_bytes_wide =
-    active_smem_bank_count(cu) * CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+    active_smem_slot_count(cu) * CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES.U
   val active_smem_capacity_bytes = Wire(UInt(log2Ceil(CONFIG.GPU.NUM_LDS+1).W))
   active_smem_capacity_bytes := Mux(
     active_smem_capacity_bytes_wide > CONFIG.GPU.NUM_LDS.U,
@@ -410,7 +410,7 @@ class allocator extends Module {
     active_smem_capacity_bytes_wide
   )
   when(fsm === FSM.ALLOC && fsm =/= fsm_r1 && selected_cu_idle_before_alloc) {
-    active_smem_bank_count(cu) := wg.smem_bank_count
+    active_smem_slot_count(cu) := wg.smem_slot_count
   }
   wgslot(cu_tmp) := wgslot(cu_tmp) & (~wgslot_dealloc_bitmask).asUInt | wgslot_alloc_bitmask
   wfslot(cu_tmp) := wfslot(cu_tmp) + wfslot_alloc_num - wfslot_dealloc_num

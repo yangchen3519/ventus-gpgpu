@@ -69,8 +69,8 @@ class ShareMemCoreReq_np extends Bundle{
   val instrId = UInt(log2Up(lsu_nMshrEntry).W)
   val isWrite = Bool()//Vec(NLanes, Bool())
   //val tag = UInt(dcache_TagBits.W)
-  val setIdx = UInt(log2Ceil(sharedmem_depth).W)
-  val smemBankCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W)
+  val slotIdx = UInt(log2Ceil(sharedmem_depth).W)
+  val smemSlotCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS+1).W)
   val perLaneAddr = Vec(num_thread, new ShareMemPerLaneAddr_np)
   val data = Vec(num_thread, UInt(xLen.W))
 }
@@ -230,9 +230,9 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   io.to_shared.bits.instrId := reg_entryID
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   //io.to_shared.bits.tag := tag
-  io.to_shared.bits.setIdx := setIdx_shared
-  io.to_shared.bits.smemBankCount :=
-    io.csr_smem_size >> log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES)
+  io.to_shared.bits.slotIdx := setIdx_shared
+  io.to_shared.bits.smemSlotCount :=
+    io.csr_smem_size >> log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES)
   (0 until num_thread).foreach(x => {
     io.to_shared.bits.perLaneAddr(x).blockOffset := blockOffset(x)
     io.to_shared.bits.perLaneAddr(x).wordOffset1H := wordOffset1H(x)

@@ -18,7 +18,7 @@ import chisel3._
 import chisel3.util._
 import config.config.Parameters
 import firrtl.Utils._
-import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_NSets_max, dcache_NWays, dcache_SetIdxBits, dcache_TagBits, dcache_WordOffsetBits, num_block, num_thread, sharedmem_depth, unified_l1_partition_banks}
+import top.parameters.{MMU_ENABLED, NUMBER_CU, dcache_BlockOffsetBits, dcache_BlockWords, dcache_MshrEntry, dcache_NSets, dcache_NSets_max, dcache_NWays, dcache_SetIdxBits, dcache_TagBits, dcache_WordOffsetBits, num_block, num_thread, sharedmem_depth, unified_l1_partition_slots}
 import mmu.SV32.{asidLen, paLen, vaLen}
 import top.parameters.DCACHE_DEBUG
 import scala.tools.nsc.interpreter.Repl
@@ -69,7 +69,7 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     val perfEnable = Input(Bool())
     val perfReset = Input(Bool())
     val perf = Output(new DCachePerfCounters)
-    val activeSmemBanks = Input(UInt(log2Ceil(unified_l1_partition_banks + 1).W))
+    val activeSmemSlots = Input(UInt(log2Ceil(unified_l1_partition_slots + 1).W))
     val partitionFlushReq = Input(Bool())
     val partitionFlushDone = Output(Bool())
     val cacheIdle = Output(Bool())
@@ -162,17 +162,17 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     partitionFlushIssued := true.B
     partitionFlushRspPending := true.B
   }
-  val activeL1DBanks = unified_l1_partition_banks.U - io.activeSmemBanks
-  val activeL1DSets = activeL1DBanks >> WayIdxBits
+  val activeL1DSlots = unified_l1_partition_slots.U - io.activeSmemSlots
+  val activeL1DSets = activeL1DSlots >> WayIdxBits
   val activeL1DSetMask = activeL1DSets(MaxSetIdxBits - 1, 0) - 1.U
   def dataArrayPhysicalSlot(oldDataIdx: UInt): UInt = {
     val setIdx = oldDataIdx >> WayIdxBits
     val wayIdx = oldDataIdx(WayIdxBits - 1, 0)
-    (io.activeSmemBanks + wayIdx * activeL1DSets + setIdx)(log2Ceil(unified_l1_partition_banks) - 1, 0)
+    (io.activeSmemSlots + wayIdx * activeL1DSets + setIdx)(log2Ceil(unified_l1_partition_slots) - 1, 0)
   }
-  assert(activeL1DBanks >= (dcache_NSets * dcache_NWays).U,
-    "DCache active L1D bank count is below minimum supported capacity")
-  assert(activeL1DBanks <= (dcache_NSets_max * dcache_NWays).U,
+  assert(activeL1DSlots >= (dcache_NSets * dcache_NWays).U,
+    "DCache active L1D slot count is below minimum supported capacity")
+  assert(activeL1DSlots <= (dcache_NSets_max * dcache_NWays).U,
     "DCache active L1D data slot range exceeds unified data array")
   assert(activeL1DSets >= dcache_NSets.U && activeL1DSets <= dcache_NSets_max.U && PopCount(activeL1DSets) === 1.U,
     "DCache active L1D set count must be a power-of-two within supported range")

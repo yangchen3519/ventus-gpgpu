@@ -338,8 +338,8 @@ class CSRFile extends Module {
     wf_tag_dispatch :=io.CTA2csr.bits.CTAdata.dispatch2cu_wf_tag_dispatch(depth_warp-1,0)// wf_tag_dispatch :=io.CTA2csr.bits.CTAdata.dispatch2cu_wf_tag_dispatch
     //todo fix lds_base_dispatch to a certain param
     lds_base_dispatch:=Cat(LDS_BASE.U(32.W)(31, LDS_ID_WIDTH + 1), io.CTA2csr.bits.CTAdata.dispatch2cu_lds_base_dispatch)
-    smem_size_dispatch := io.CTA2csr.bits.CTAdata.dispatch2cu_smem_bank_count *
-      CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_BANK_BYTES.U
+    smem_size_dispatch := io.CTA2csr.bits.CTAdata.dispatch2cu_smem_slot_count *
+      CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES.U
     pds_baseaddr:=io.CTA2csr.bits.CTAdata.dispatch2cu_pds_base_dispatch
     knl_base:=io.CTA2csr.bits.CTAdata.dispatch2cu_csr_knl_dispatch
     wg_id_x:=io.CTA2csr.bits.CTAdata.dispatch2cu_wgid_x_dispatch

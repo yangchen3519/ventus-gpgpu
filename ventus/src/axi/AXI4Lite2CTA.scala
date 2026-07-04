@@ -91,7 +91,7 @@ class AXI4Lite2CTA(val addrWidth:Int, val busWidth:Int) extends Module{
   io.data.bits.host_vgpr_size_total:=regs(5)
   io.data.bits.host_sgpr_size_total:=regs(6)
   io.data.bits.host_lds_size_total:=regs(7)
-  io.data.bits.host_smem_bank_count:=regs(20)
+  io.data.bits.host_smem_slot_count:=regs(20)
   io.data.bits.host_gds_size_total:=0.U
   io.data.bits.host_vgpr_size_per_wf:=regs(8)
   io.data.bits.host_sgpr_size_per_wf:=regs(9)

@@ -77,7 +77,7 @@ trait ctainfo_alloc_to_cu extends Bundle {
  */
 trait ctainfo_host_to_alloc_to_cu extends Bundle {
   val num_wf = UInt(log2Ceil(CONFIG.WG.NUM_WF_MAX+1).W)       // Number of wavefront in this cta
-  val smem_bank_count = UInt(log2Ceil(CONFIG.GPU.UNIFIED_L1_PARTITION_BANKS+1).W) // per-SM SMEM partition banks requested by this kernel
+  val smem_slot_count = UInt(log2Ceil(CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS+1).W) // per-SM SMEM partition slots requested by this kernel
   val wgIdx_x = UInt(log2Ceil(CONFIG.KERNEL.NUM_WG_MAX).W)    // thread-block index in grid - x dimension
   val wgIdx_y = UInt(log2Ceil(CONFIG.KERNEL.NUM_WG_MAX).W)    // thread-block index in grid - y dimension
   val wgIdx_z = UInt(log2Ceil(CONFIG.KERNEL.NUM_WG_MAX).W)    // thread-block index in grid - z dimension

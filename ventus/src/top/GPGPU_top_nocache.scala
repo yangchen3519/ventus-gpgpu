@@ -36,20 +36,20 @@ class SM_wrapper_nocache() extends Module {
   })
 
   val cta2warp = Module(new CTA2warp)
-  val activeSmemBanks = RegInit(sharedmem_depth.U(log2Ceil(unified_l1_partition_banks + 1).W))
+  val activeSmemSlots = RegInit(sharedmem_depth.U(log2Ceil(unified_l1_partition_slots + 1).W))
   val activeWarpCount = RegInit(0.U(log2Ceil(num_warp + 1).W))
   val smIdle = activeWarpCount === 0.U
-  val requestedSmemBanks = Mux(
-    io.CTAreq.bits.dispatch2cu_smem_bank_count === 0.U,
+  val requestedSmemSlots = Mux(
+    io.CTAreq.bits.dispatch2cu_smem_slot_count === 0.U,
     sharedmem_depth.U,
-    io.CTAreq.bits.dispatch2cu_smem_bank_count
+    io.CTAreq.bits.dispatch2cu_smem_slot_count
   )
-  val pendingSmemBanks = Reg(UInt(log2Ceil(unified_l1_partition_banks + 1).W))
+  val pendingSmemSlots = Reg(UInt(log2Ceil(unified_l1_partition_slots + 1).W))
   val switchIdle :: switchUpdate :: Nil = Enum(2)
   val partitionSwitchState = RegInit(switchIdle)
   val partitionSwitchBusy = partitionSwitchState =/= switchIdle
-  val partitionSwitchReq = io.CTAreq.valid && smIdle && (requestedSmemBanks =/= activeSmemBanks)
-  val partitionMatches = requestedSmemBanks === activeSmemBanks
+  val partitionSwitchReq = io.CTAreq.valid && smIdle && (requestedSmemSlots =/= activeSmemSlots)
+  val partitionMatches = requestedSmemSlots === activeSmemSlots
   val canAcceptPartition = partitionMatches && !partitionSwitchBusy
   cta2warp.io.CTAreq.valid := io.CTAreq.valid && canAcceptPartition
   cta2warp.io.CTAreq.bits := io.CTAreq.bits
@@ -77,10 +77,10 @@ class SM_wrapper_nocache() extends Module {
     activeWarpCount := activeWarpCount - 1.U
   }
   when(partitionSwitchReq && partitionSwitchState === switchIdle) {
-    pendingSmemBanks := requestedSmemBanks
+    pendingSmemSlots := requestedSmemSlots
     partitionSwitchState := switchUpdate
   }.elsewhen(partitionSwitchState === switchUpdate) {
-    activeSmemBanks := pendingSmemBanks
+    activeSmemSlots := pendingSmemSlots
     partitionSwitchState := switchIdle
   }
   when(io.CTAreq.valid && !canAcceptPartition) {
@@ -100,8 +100,8 @@ class SM_wrapper_nocache() extends Module {
   sharedmem.io.coreReq.bits.data:=pipe.io.shared_req.bits.data
   sharedmem.io.coreReq.bits.instrId:=pipe.io.shared_req.bits.instrId
   sharedmem.io.coreReq.bits.isWrite:=pipe.io.shared_req.bits.isWrite
-  sharedmem.io.coreReq.bits.setIdx:=pipe.io.shared_req.bits.setIdx
-  sharedmem.io.coreReq.bits.smemBankCount:=activeSmemBanks
+  sharedmem.io.coreReq.bits.slotIdx:=pipe.io.shared_req.bits.slotIdx
+  sharedmem.io.coreReq.bits.smemSlotCount:=activeSmemSlots
   sharedmem.io.coreReq.bits.perLaneAddr:=pipe.io.shared_req.bits.perLaneAddr
   sharedmem.io.coreReq.valid:=pipe.io.shared_req.valid
   pipe.io.shared_req.ready:=sharedmem.io.coreReq.ready
