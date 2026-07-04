@@ -69,6 +69,7 @@ class DataCrossbar(implicit p: Parameters) extends ShareMemModule {
 }
 
 class AddrBundle1T(implicit p: Parameters) extends ShareMemBundle {
+  val slotIdx = UInt(SetIdxBits.W)
   val bankOffset = if(BlockOffsetBits-BankIdxBits>0) Some(UInt((BlockOffsetBits-BankIdxBits).W)) else None
   val wordOffset1H = UInt(BytesOfWord.W)
 }
@@ -125,6 +126,7 @@ class BankConflictArbiter(implicit p: Parameters) extends ShareMemModule{
   (0 until NLanes).foreach{i =>
     perLaneReq(i).activeMask := io.coreReqArb.perLaneAddr(i).activeMask
     perLaneReq(i).bankIdx := io.coreReqArb.perLaneAddr(i).blockOffset(BankIdxBits-1,0)
+    perLaneReq(i).AddrBundle.slotIdx := io.coreReqArb.perLaneAddr(i).slotIdx
     if(BlockOffsetBits>BankIdxBits){
       perLaneReq(i).AddrBundle.bankOffset.foreach(_:= io.coreReqArb.perLaneAddr(i).blockOffset(BlockOffsetBits-1,BankIdxBits))}
     else{

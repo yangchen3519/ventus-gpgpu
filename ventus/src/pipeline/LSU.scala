@@ -61,6 +61,7 @@ class DCacheCoreRsp_np extends Bundle{
 
 class ShareMemPerLaneAddr_np extends Bundle{
   val activeMask = Bool()
+  val slotIdx = UInt(log2Ceil(sharedmem_depth).W)
   val blockOffset = UInt(dcache_BlockOffsetBits.W)
   val wordOffset1H = UInt(BytesOfWord.W)
 }
@@ -68,8 +69,6 @@ class ShareMemCoreReq_np extends Bundle{
   //val ctrlAddr = new Bundle{
   val instrId = UInt(log2Up(lsu_nMshrEntry).W)
   val isWrite = Bool()//Vec(NLanes, Bool())
-  //val tag = UInt(dcache_TagBits.W)
-  val slotIdx = UInt(log2Ceil(sharedmem_depth).W)
   val smemSlotCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS+1).W)
   val perLaneAddr = Vec(num_thread, new ShareMemPerLaneAddr_np)
   val data = Vec(num_thread, UInt(xLen.W))
@@ -230,13 +229,16 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
   io.to_shared.bits.instrId := reg_entryID
   // |reg_save| -> |addr & mask| -> |PriorityEncoder| -> |tag & idx| -> |io.to_dcache.bits|
   //io.to_shared.bits.tag := tag
-  io.to_shared.bits.slotIdx := setIdx_shared
   io.to_shared.bits.smemSlotCount :=
     io.csr_smem_size >> log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOT_BYTES)
   (0 until num_thread).foreach(x => {
+    io.to_shared.bits.perLaneAddr(x).slotIdx := addr(x)(
+      log2Ceil(sharedmem_depth) + dcache_BlockOffsetBits + dcache_WordOffsetBits - 1,
+      dcache_BlockOffsetBits + dcache_WordOffsetBits
+    )
     io.to_shared.bits.perLaneAddr(x).blockOffset := blockOffset(x)
     io.to_shared.bits.perLaneAddr(x).wordOffset1H := wordOffset1H(x)
-    io.to_shared.bits.perLaneAddr(x).activeMask := reg_save.mask(x) && (addr(x)(xLen-1, xLen-1-dcache_TagBits+1)===tag && addr(x)(xLen-1-dcache_TagBits, xLen-1-dcache_TagBits-dcache_SetIdxBits+1)===setIdx)
+    io.to_shared.bits.perLaneAddr(x).activeMask := reg_save.mask(x)
   })
   io.to_shared.bits.data := data_next//Mux(reg_save.ctrl.mem_cmd(0).asBool, VecInit(Seq.fill(num_thread)(0.U(xLen.W))), reg_save.in3)
   io.to_shared.bits.isWrite := reg_save.ctrl.mem_cmd(1)
@@ -331,11 +333,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
     }
     is (s_shared){
       when(io.to_shared.fire){
-        when(cnt.value>=num_thread.U || mask_next.asUInt===0.U){
-          cnt.reset(); state := s_idle
-        }.otherwise{
-          cnt.inc(); state := s_shared
-        }
+        cnt.reset(); state := s_idle
       }.otherwise{state := s_shared}
     }
     is (s_dcache) {
@@ -407,12 +405,7 @@ class AddrCalculate(val sharedmemory_maxsize: UInt = 4096.U(32.W)) extends Modul
       }
     }
     is (s_shared){
-      // Maybe Nothing here :-)
-      when(io.to_shared.fire){                                      // request is sent
-        reg_save.mask := mask_next
-      }.otherwise{
-        reg_save.mask := reg_save.mask
-      }
+      reg_save.mask := reg_save.mask
     }
     is (s_dcache){
       when(io.to_dcache.fire){                                      // request is sent

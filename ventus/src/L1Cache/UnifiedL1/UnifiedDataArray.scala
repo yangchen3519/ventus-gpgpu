@@ -19,7 +19,7 @@ class UnifiedDCacheWriteReq extends Bundle {
 }
 
 class UnifiedSMemReq extends Bundle {
-  val physicalSlot = UInt(log2Ceil(unified_l1_partition_slots).W)
+  val physicalSlot = Vec(sharedmem_BlockWords, UInt(log2Ceil(unified_l1_partition_slots).W))
   val isWrite = Bool()
   val bankEn = Vec(sharedmem_BlockWords, Bool())
   val wdata = Vec(sharedmem_BlockWords, UInt(xLen.W))
@@ -62,7 +62,7 @@ class UnifiedDataArray extends Module {
     val array = SyncReadMem(unified_l1_partition_slots, Vec(BytesOfWord, UInt(8.W)))
 
     val dcacheReadBytes = array.read(io.dcacheReadReq.bits.physicalSlot, dcacheReadFire)
-    val smemReadBytes = array.read(io.smemReq.bits.physicalSlot, smemReadFire && io.smemReq.bits.bankEn(word))
+    val smemReadBytes = array.read(io.smemReq.bits.physicalSlot(word), smemReadFire && io.smemReq.bits.bankEn(word))
 
     val dcacheWriteMask = io.dcacheWriteReq.bits.mask(word)
     val dcacheWriteEn = dcacheWriteFire && dcacheWriteMask.orR
@@ -76,11 +76,11 @@ class UnifiedDataArray extends Module {
       array.write(io.dcacheWriteReq.bits.physicalSlot, dcacheWriteBytes, dcacheWriteMask.asBools)
     }
     when(smemWriteEn) {
-      array.write(io.smemReq.bits.physicalSlot, smemWriteBytes, smemWriteMask.asBools)
+      array.write(io.smemReq.bits.physicalSlot(word), smemWriteBytes, smemWriteMask.asBools)
     }
 
     when(dcacheWriteEn && smemWriteEn) {
-      assert(io.dcacheWriteReq.bits.physicalSlot =/= io.smemReq.bits.physicalSlot,
+      assert(io.dcacheWriteReq.bits.physicalSlot =/= io.smemReq.bits.physicalSlot(word),
         "UnifiedDataArray DCache/SMEM write conflict on same physical slot")
     }
 
@@ -89,13 +89,13 @@ class UnifiedDataArray extends Module {
         io.dcacheReadReq.bits.physicalSlot === io.dcacheWriteReq.bits.physicalSlot, false.B)
     val smemBypassToDCacheHit =
       RegNext(dcacheReadFire && smemWriteEn &&
-        io.dcacheReadReq.bits.physicalSlot === io.smemReq.bits.physicalSlot, false.B)
+        io.dcacheReadReq.bits.physicalSlot === io.smemReq.bits.physicalSlot(word), false.B)
     val smemBypassHit =
       RegNext(smemReadFire && io.smemReq.bits.bankEn(word) && smemWriteEn &&
-        io.smemReq.bits.physicalSlot === io.smemReq.bits.physicalSlot, false.B)
+        io.smemReq.bits.physicalSlot(word) === io.smemReq.bits.physicalSlot(word), false.B)
     val dcacheBypassToSMemHit =
       RegNext(smemReadFire && io.smemReq.bits.bankEn(word) && dcacheWriteEn &&
-        io.smemReq.bits.physicalSlot === io.dcacheWriteReq.bits.physicalSlot, false.B)
+        io.smemReq.bits.physicalSlot(word) === io.dcacheWriteReq.bits.physicalSlot, false.B)
 
     val dcacheBypassMask = RegNext(dcacheWriteMask)
     val dcacheBypassBytes = RegNext(dcacheWriteBytes)

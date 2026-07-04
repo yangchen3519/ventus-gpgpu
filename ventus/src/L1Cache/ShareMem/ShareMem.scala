@@ -32,6 +32,7 @@ import top.parameters.CTA_SCHE_CONFIG
 
 class ShareMemPerLaneAddr(implicit p: Parameters) extends ShareMemBundle{
   val activeMask = Bool()
+  val slotIdx = UInt(SetIdxBits.W)
   val blockOffset = UInt(BlockOffsetBits.W)
   val wordOffset1H = UInt(BytesOfWord.W)
 }
@@ -39,8 +40,6 @@ class ShareMemCoreReq(implicit p: Parameters) extends ShareMemBundle{
   //val ctrlAddr = new Bundle{
   val instrId = UInt(WIdBits.W)//TODO length unsure
   val isWrite = Bool()//Vec(NLanes, Bool())
-  //val tag = UInt(TagBits.W)
-  val slotIdx = UInt(SetIdxBits.W)
   val smemSlotCount = UInt(log2Ceil(CTA_SCHE_CONFIG.GPU.UNIFIED_L1_PARTITION_SLOTS+1).W)
   val perLaneAddr = Vec(NLanes, new ShareMemPerLaneAddr)
   val data = Vec(NLanes, UInt(WordLength.W))
@@ -56,7 +55,6 @@ class ShareMemCoreRsp(implicit p: Parameters) extends ShareMemBundle{
 class ShareMemGrantMeta(implicit p: Parameters) extends ShareMemBundle{
   val instrId = UInt(WIdBits.W)
   val isWrite = Bool()
-  val slotIdx = UInt(SetIdxBits.W)
   val activeMask = Vec(NLanes, Bool())
   val addrCrsbarOut = Vec(NBanks, new AddrBundle1T)
   val dataCrsbarSel1H = Vec(NBanks, UInt(NBanks.W))
@@ -91,8 +89,12 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   val coreReq_st1 = RegEnable(io.coreReq.bits, io.coreReq.fire)
   val coreReqHasActiveLane = io.coreReq.bits.perLaneAddr.map(_.activeMask).reduce(_ || _)
   when(io.coreReq.fire && coreReqHasActiveLane) {
-    assert(io.coreReq.bits.slotIdx < io.coreReq.bits.smemSlotCount,
-      "SharedMemory access exceeds active SMEM partition")
+    io.coreReq.bits.perLaneAddr.foreach { laneAddr =>
+      when(laneAddr.activeMask) {
+        assert(laneAddr.slotIdx < io.coreReq.bits.smemSlotCount,
+          "SharedMemory access exceeds active SMEM partition")
+      }
+    }
   }
   BankConfArb.io.coreReqArb.enable := io.coreReq.fire
   BankConfArb.io.coreReqArb.isWrite := Mux(BankConfArb.io.busy,coreReq_st1.isWrite,io.coreReq.bits.isWrite)
@@ -142,7 +144,6 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
   val grantMeta = Wire(new ShareMemGrantMeta)
   grantMeta.instrId := activeReq.instrId
   grantMeta.isWrite := activeReq.isWrite
-  grantMeta.slotIdx := activeReq.slotIdx
   grantMeta.activeMask := BankConfArb.io.activeLane
   grantMeta.addrCrsbarOut := BankConfArb.io.addrCrsbarOut
   grantMeta.dataCrsbarSel1H := BankConfArb.io.dataCrsbarSel1H
@@ -165,10 +166,10 @@ class SharedMemory(implicit p: Parameters) extends ShareMemModule{
 
   // ******     Unified data array request      ******
   io.dataArrayReq.valid := grantFire
-  io.dataArrayReq.bits.physicalSlot := grantMeta.slotIdx
   io.dataArrayReq.bits.isWrite := grantMeta.isWrite
   io.dataArrayReq.bits.bankEn := grantMeta.dataArrayEn
   for(i <- 0 until NBanks) {
+    io.dataArrayReq.bits.physicalSlot(i) := grantMeta.addrCrsbarOut(i).slotIdx
     io.dataArrayReq.bits.wdata(i) := DataCorssBarForWrite.io.DataOut(i)
     io.dataArrayReq.bits.wmask(i) := grantMeta.addrCrsbarOut(i).wordOffset1H
   }

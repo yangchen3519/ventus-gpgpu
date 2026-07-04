@@ -100,7 +100,6 @@ class SM_wrapper_nocache() extends Module {
   sharedmem.io.coreReq.bits.data:=pipe.io.shared_req.bits.data
   sharedmem.io.coreReq.bits.instrId:=pipe.io.shared_req.bits.instrId
   sharedmem.io.coreReq.bits.isWrite:=pipe.io.shared_req.bits.isWrite
-  sharedmem.io.coreReq.bits.slotIdx:=pipe.io.shared_req.bits.slotIdx
   sharedmem.io.coreReq.bits.smemSlotCount:=activeSmemSlots
   sharedmem.io.coreReq.bits.perLaneAddr:=pipe.io.shared_req.bits.perLaneAddr
   sharedmem.io.coreReq.valid:=pipe.io.shared_req.valid
