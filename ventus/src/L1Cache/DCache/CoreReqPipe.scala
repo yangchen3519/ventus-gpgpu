@@ -33,7 +33,7 @@ class CoreRspPipe_st2(implicit p: Parameters) extends DCacheBundle{
 class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   private val MaxSets = dcache_NSets_max
   private val MaxSetIdxBits = log2Ceil(MaxSets)
-  private val MaxDataSets = MaxSets * dcache_NWays
+  private val MaxDataSets = MaxSets * NWays
 
   val io = IO(new Bundle{
     //st0
@@ -42,16 +42,25 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val hasDirty       = Input(Bool())
     val MSHREmpty      = Input(Bool())
     val SMSHREmpty     = Input(Bool())
+    val fillPipeDrained = Input(Bool())   // bfs4096-008 §9 drain-before-invalidate (cached-read fill pipe 已空)
     val tA_dirtySetIdx_st0 = Input(UInt(MaxSetIdxBits.W))
     val tA_dirtyWayMask_st0= Input(UInt(dcache_NWays.W))
+    val activeL1DSetMask = Input(UInt(MaxSetIdxBits.W))
     val reqSource      = Input(Bool()) // 1- from RTAB 0 - from io
     // dirty replace 期间暂停 coreReqPipe，避免 victim line write-hit 干扰写回数据
     val blockCoreReq   = Input(Bool())
     // memRspPipe 正在对 dA 写回(refill)时的 blockAddr，用于规避与 st0 同拍访问同一 cacheline
     val refillWrite_valid = Input(Bool())
     val refillWrite_blockAddr = Input(UInt(bABits.W))
+    // bfs4096-009 fix: 真实 fill commit (=memRspPipe.dAmemRsp_wReq_valid，含 st1_ready，非上面 intent 的 refillWrite_valid)
+    // + blockAddr。给 ReadMissFillWait 的 commit-seen latch(覆盖 RTAB_full / st1 stall 期间已 commit 的 edge)。
+    val fillCommit_valid = Input(Bool())
+    val fillCommit_blockAddr = Input(UInt(bABits.W))
+    // bfs4096-006 fix: refill 写入的精确 dA row id = Cat(set, victim_way)。
+    // 现有 refillWrite_blockAddr 是 tag+set 只挡同 cacheline，但本 bug 是
+    // 跨 cacheline (不同 tag) 同 (set, way) 物理 row 撞 → 必须按 row 比较。
+    val refillWrite_setIdx = Input(UInt(log2Ceil(MaxDataSets).W))
     val refillWrite_asid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
-    val activeL1DSetMask = Input(UInt(MaxSetIdxBits.W))
     // MSHR missRspIn 处理期间的“原子态”指示：同拍 mshrStatus 尚未更新，外部不应插入同块的 secondary miss
     val mshrReleasing_valid = Input(Bool())
     val mshrReleasing_blockAddr = Input(UInt(bABits.W))
@@ -71,6 +80,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     
     val tA_Hit_st1          = Input(new hitStatus(NWays, bABits))
     val tA_dirtyTag_st1     = Input(UInt(bABits.W))
+    // bfs4096-001 partial-write clobber fix: byte-level dirty mask of the chosen flush victim
+    val tA_dirtyMask_st1    = Input(UInt((BlockWords * BytesOfWord).W))
     val tA_dirtyAsid_st1    = if(MMU_ENABLED) {Some(Input(UInt(asidLen.W)))} else None
     val MSHR_ProbeStatus    = Input(new MSHRprobeOut(NMshrEntry, NMshrSubEntry))
     val SMSHR_ProbeStatus   = Input(new SMSHRprobeOut(NMshrEntry))
@@ -87,8 +98,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val CacheHit_st1        = Output(Bool())
     val Req_st1_RTAB        = ValidIO(new RTABReq())
     val CheckReq_WSHR       = Output(new WSHRreq)
-    val Probe_SMSHR         = DecoupledIO(new SMSHRmissReq(bABits, tIBits, WIdBits, asidLen))//TODO add special MSHR
-    val MissReq_MSHR        = DecoupledIO(new MSHRmissReq(bABits, tIBits, WIdBits, asidLen))
+    // {S}MSHRmissReq.instrId width = max(WIdBits, log2Up(NMshrEntry)) to allow
+    // NMshrEntry > num_warp; see bugs/bfs4096-003/phase_4_report.md.
+    val Probe_SMSHR         = DecoupledIO(new SMSHRmissReq(bABits, tIBits, math.max(WIdBits, log2Up(NMshrEntry)), asidLen))//TODO add special MSHR
+    val MissReq_MSHR        = DecoupledIO(new MSHRmissReq(bABits, tIBits, math.max(WIdBits, log2Up(NMshrEntry)), asidLen))
     val MissCached_MSHR     = Output(Bool())
     val st1_valid           = Output(Bool())
     val st1_ready           = Output(Bool())
@@ -97,7 +110,6 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val WriteReq_dA         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
     val WriteReq_dA_valid   = Output(Vec(BlockWords,Bool()))
     val WriteHit_st1        = Output(Bool())
-    val flushIdle           = Output(Bool())
 
     //st2
     val dA_data        = Input(Vec(BlockWords, UInt(WordLength.W)))
@@ -108,6 +120,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     val memRspIsFlu = Input(Bool())
     val st2_ready = Output(Bool())
     val invalidate_tA = Output(Bool())
+    val flushIdle = Output(Bool())
 
     val perfReqFire       = Output(Bool())
     val perfReqFromReplay = Output(Bool())
@@ -160,10 +173,10 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   Control.io.opcode := io.CoreReq.bits.opcode
   Control.io.param  := io.CoreReq.bits.param
 
-  val activeSetIdx_st0 = io.CoreReq.bits.blockAddr(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
-  val activeSetIdx_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Req.blockAddr(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
   val BlockAddr_st0 = io.CoreReq.bits.blockAddr
   val BlockAddr_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Req.blockAddr
+  val activeSetIdx_st0 = BlockAddr_st0(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+  val activeSetIdx_st1 = BlockAddr_st1(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
   val refillSameBlock_st0 =
     io.refillWrite_valid &&
       (io.refillWrite_blockAddr === BlockAddr_st0) &&
@@ -185,6 +198,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.Req_st0_RTAB.bits.ReqType     := DontCare
   io.Req_st0_RTAB.bits.mshrIdx     := DontCare
   io.Req_st0_RTAB.bits.wshrIdx     := DontCare
+  io.Req_st0_RTAB.bits.fillAlreadyCommitted := false.B   // bfs4096-009: st0/hitRTAB 路径不消费此字段
   io.Req_st0_RTAB.valid            := io.RTABHit && io.CoreReq.valid && !io.reqSource
   io.CoreReq.ready := st0_ready
   //Flush L2 FSM
@@ -192,7 +206,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   val FlushInvstateReg = RegInit(idle)
   val FlushInvstateReg_next = WireInit(FlushInvstateReg)
   val fluInvReq_st0 = io.CoreReq.valid && (CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate)
-  val fluInvStartOk_st0 = fluInvReq_st0 && io.MSHREmpty && io.SMSHREmpty
+  val fluInvStartOk_st0 = fluInvReq_st0 && io.MSHREmpty && io.SMSHREmpty && io.fillPipeDrained//bfs4096-008 §9: invalidate 启动须 cached-read fill pipe 已 drain (覆盖 MSHREmpty 漏的 W1/st1 窗口)
   val flushDirtyReq_st0 = fluInvStartOk_st0 && io.hasDirty && (FlushInvstateReg === idle)
   io.flushDirty_tA := flushDirtyReq_st0
   val FluInv_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush || CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate
@@ -212,15 +226,22 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
     // probe SMSHR MSHR and tag
     when(CoreReqControl_st0.isRead || CoreReqControl_st0.isWrite|| CoreReqControl_st0.isAMO || CoreReqControl_st0.isLR || CoreReqControl_st0.isSC){
       // 避免 refill / 前一条 read miss 与当前同块请求在 st0 同拍推进，导致后续 MSHR 可见性错位
-      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0
-      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0
+      // vecadd4096-001/nn64k-008 fix (v4 主窗口 gate, 收窄自 v2): flush/invalidate FSM 离 idle 期间, 只挡写类
+      //   (isWrite 直接置 L1 way_dirty:L1TagAccess:388; isAMO/isSC 保守纳入=memory-ordering, 非 L1 dirty producer) 进 st0
+      //   → 防新写 write-hit 把已 sweep 行置 dirty, 被 responding invalidateAll(L1TagAccess:446) 裸清丢 → L2 stale。
+      //   read/LR 放行: 不写 way_dirty 不制造 dirty, 挡它们对 flush 原子性无益, 反 stall bfs 合法 read 引入 lost-update
+      //   回归(二分坐实 v2 全挡炸 bfs 7/10; codex §1.1(e) 建议只挡写)。caveat: read-miss fill 若与 invalidateAll 同/后拍
+      //   到达, allocate-valid 优先(L1TagAccess:444) 可能留 clean-valid line —— 不丢 dirty, 但 invalidate 后非保证空。
+      //   ★注入本分支内(非外层覆盖) → 保留 RTAB-hit 吸收/flush 指令/WaitMSHR 控制握手(v1 外层覆盖破坏 RTAB 堵死教训)。
+      st0_valid  := io.CoreReq.valid && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0 && (FlushInvstateReg === idle || !(CoreReqControl_st0.isWrite || CoreReqControl_st0.isAMO || CoreReqControl_st0.isSC))
+      st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.Probe_tA_ready && !refillSameBlock_st0 && !pendingReadMissSameBlock_st0 && (FlushInvstateReg === idle || !(CoreReqControl_st0.isWrite || CoreReqControl_st0.isAMO || CoreReqControl_st0.isSC))
     }.elsewhen(CoreReqControl_st0.isWaitMSHR){
       //wait until MSHR empty
       st0_valid  := io.CoreReq.valid && io.MSHREmpty && io.SMSHREmpty
       st0_ready := CoreReq_pipeReg_st0_st1.enq.ready && io.MSHREmpty && io.SMSHREmpty
     }.elsewhen(CoreReqControl_st0.isFlush || CoreReqControl_st0.isInvalidate){
         when(FlushInvstateReg === idle){
-          when(!io.MSHREmpty || !io.SMSHREmpty){
+          when(!io.MSHREmpty || !io.SMSHREmpty || !io.fillPipeDrained){//bfs4096-008 §9: fill pipe 未 drain 时 invalidate 停 st0 (仅 idle 态 gate, FSM 离 idle 后不再 gate=死锁免疫)
             st0_valid := false.B
             st0_ready := false.B
           }.elsewhen(io.hasDirty){
@@ -249,6 +270,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
       (FluInvRspPendingReg && FluInvRspCtrlReg.isInvalidate) ||
         (FluInvReq_st1_valid && CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isInvalidate)
     )
+  io.flushIdle := FlushInvstateReg === idle
   io.st0_valid := st0_valid
   io.st0_ready := st0_ready
 
@@ -306,7 +328,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   CoreReq_pipeReg_st0_st1.enq.bits.fromReplay := io.reqSource
   //=== st1 ===
 
-  io.tagFromCore_tA_st1 := BlockAddr_st1 // check the full block address from core with tag from tA block
+  io.tagFromCore_tA_st1 := BlockAddr_st1 // compare full blockAddr when active set count expands beyond default
   if(MMU_ENABLED){
     io.asidFromCore_tA_st1.get := CoreReq_pipeReg_st0_st1.deq.bits.Req.asid.get
   }
@@ -314,7 +336,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.coreReq_Control_st1 := CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val Control_st1 = CoreReq_pipeReg_st0_st1.deq.bits.Ctrl
   val fromReplay_st1 = CoreReq_pipeReg_st0_st1.deq.bits.fromReplay
-  io.read_Req_dA.bits.foreach(_.setIdx := Cat(activeSetIdx_st1,OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
+  io.read_Req_dA.bits.foreach(_.setIdx := Cat(activeSetIdx_st1, OHToUInt(io.tA_Hit_st1.waymask))) // dA r req addr
   when(flushDirtyReq_st0){
     io.read_Req_dA.bits.foreach(_.setIdx := Cat(io.tA_dirtySetIdx_st0,OHToUInt(io.tA_dirtyWayMask_st0)))
   }
@@ -361,6 +383,49 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   io.CacheHit_st1 := CacheHit_st1
   io.WriteHit_st1 := WriteHit_st1
   missMemReq_valid := (CacheMiss_st1 && !FluInv_st1 || UCReqHitNDirty) && CoreReq_pipeReg_st0_st1.deq.fire && !io.Req_st1_RTAB.valid && io.MSHR_ProbeStatus.probeStatus === 0.U
+  // bfs4096-006 fix: 检测 hit-read 与 fill write 同拍撞同 dA row。
+  // 物理上 dA SRAM 的 row 索引是 Cat(set, way)；当 hit-read 命中 way A、fill 正在写 way A，
+  // 即使 tag 不同 (两条不同 cacheline)，dA SRAM 物理位置的 ownership 已经被 fill 抢走。
+  // dA SRAM bypassWrite=true 会把 fresh fill data forward 给 hit-read，造成跨 cacheline 数据污染
+  // (cost tag 0x90034 命中却拿到 visited 数据 0x01010101)。
+  // 触发条件 [A] hit-read [B] fill 同拍 [C] Cat(set, hit_way) == Cat(set, victim_way) [D] bypassWrite=true。
+  // 必须 qualify deq.valid && ReadHit_st1：否则非 hit 场景 OHToUInt(0.U)=0 会与 fill_setIdx 任何 way=0 撞误报。
+  // wire 定义提到 RTAB elsewhen 链之前，使下方 elsewhen 分支可直接引用 fillConflictSt1。
+  // 见 bugs/bfs4096-006/phase_4_report.md §III + §VI.4。
+  val hitReadSetIdx_st1 = Cat(
+    activeSetIdx_st1,
+    OHToUInt(io.tA_Hit_st1.waymask)
+  )
+  val fillConflictSt1 =
+    CoreReq_pipeReg_st0_st1.deq.valid &&
+    ReadHit_st1 &&
+    io.refillWrite_valid &&
+    (io.refillWrite_setIdx === hitReadSetIdx_st1)
+  // bfs4096-009 fix: ReadMissFillWait trigger —— 当前 st1 read-miss 在驻留 st1 期间撞过同 block missRspIn 释放。
+  // clear 分支 (!deq.valid || deq.fire) 优先 → 排除 st1 空时 stale deq.bits 误触发(codex round5/6 §A.1)；
+  // mshrReleasingSameBlock_st1(CoreReqPipe:300) 本身不带 deq.valid，靠这里 + ReadMiss_st1 qualify；
+  // latch straddleBlockAddr 绑定到所属 req，trigger 再复查 blockAddr 匹配(跨 req 兜底)。
+  val straddledRelease_st1  = RegInit(false.B)
+  val straddleBlockAddr_st1 = Reg(UInt(bABits.W))
+  when(!CoreReq_pipeReg_st0_st1.deq.valid || CoreReq_pipeReg_st0_st1.deq.fire){
+    straddledRelease_st1 := false.B
+  }.elsewhen(ReadMiss_st1 && mshrReleasingSameBlock_st1){
+    straddledRelease_st1  := true.B
+    straddleBlockAddr_st1 := BlockAddr_st1
+  }
+  val readMissFillWait_st1 = CoreReq_pipeReg_st0_st1.deq.valid && ReadMiss_st1 &&
+    ( mshrReleasingSameBlock_st1 ||
+      (straddledRelease_st1 && (straddleBlockAddr_st1 === BlockAddr_st1)) )
+  // bfs4096-009 fix: commit-seen —— 当前 st1 req 驻留期间见过本 block 真实 fill commit。clear 同上优先。
+  // 随 RTABReq.fillAlreadyCommitted 带入(同拍 commit 用组合 OR 补)，覆盖 commit 与 enq 同拍 / commit 在 enq 前两种 edge。
+  val fillCommitSeen_st1 = RegInit(false.B)
+  when(!CoreReq_pipeReg_st0_st1.deq.valid || CoreReq_pipeReg_st0_st1.deq.fire){
+    fillCommitSeen_st1 := false.B
+  }.elsewhen(io.fillCommit_valid && (io.fillCommit_blockAddr === BlockAddr_st1)){
+    fillCommitSeen_st1 := true.B
+  }
+  io.Req_st1_RTAB.bits.fillAlreadyCommitted := fillCommitSeen_st1 ||
+    (io.fillCommit_valid && (io.fillCommit_blockAddr === BlockAddr_st1))
   // RTABReqType req
   val Req_RTAB_st1_valid = Wire(Bool())
   Req_RTAB_st1_valid := false.B
@@ -390,8 +455,23 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   }.elsewhen(Control_st1.isSC && io.SMSHR_ProbeStatus.LRexist){
     Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
     ReplayType := SCLRexist
+  }.elsewhen(fillConflictSt1){
+    // bfs4096-006 fix: 接入 elsewhen 链最末，与上方分支 (多为 miss/UC/SC) 互斥。
+    // 理论上 fillConflictSt1 ⇒ ReadHit_st1，与 readHitWSHR (Read+WSHR Hit) 也互斥
+    // (WSHR hit 要求 same blockAddr 在 WSHR；fillConflict 要求 dA row ownership 已转走)。
+    Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
+    ReplayType := fillConflict
+  }.elsewhen(readMissFillWait_st1){
+    // bfs4096-009 fix: read-miss 撞同 block in-flight fill → 挂 RTAB 等 commit replay re-probe hit。
+    // 与 fillConflictSt1(要求 ReadHit)天然互斥; 抑制第二条 memReq(L364 !Req_st1_RTAB.valid)+ MSHR alloc(L533 !Req_RTAB_st1_valid)。
+    Req_RTAB_st1_valid := CoreReq_pipeReg_st0_st1.deq.valid
+    ReplayType := ReadMissFillWait
   }
-  io.read_Req_dA.valid := ReadHit_st1 || UCReqHitDirty || flushDirtyReq_st0
+  // bfs4096-006 fix: gate 掉 dA read 避免被 bypass 污染。replay 出来后 tag 已 update，
+  // 同 way 的 tag 已经是 fill 后新 tag (例: visited 0x90002)，原 hit-read 的 tag (cost 0x90034) 不再 match → miss
+  // → 走 MSHR 重新 fetch cost cacheline，落到 LRU 选的另一 way (visited 此时是 MRU 不会被选中)。
+  val realReadHit_st1 = ReadHit_st1 && !fillConflictSt1
+  io.read_Req_dA.valid := realReadHit_st1 || UCReqHitDirty || flushDirtyReq_st0
 
   //missReq 2 mem, request type and data generator
   OpcodeGen.io.coreReqCtrl := Control_st1
@@ -405,7 +485,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // 因此 write miss 在这里先把主体字段整理好，a_source 仅作为占位。
   // cache miss mem Req
   missMemReq_st1.a_opcode := OpcodeGen.io.memReq_a_opcode
-  missMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
+  missMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((WordLength - bABits).W))
   missMemReq_st1.a_param  := OpcodeGen.io.memReq_a_param
   missMemReq_st1.a_data := addrGen.io.dataOut
   missMemReq_st1.hasCoreRsp := Control_st1.isWrite
@@ -432,7 +512,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // dirty line 需要 PutFull 把 victim line 写回；否则发 Flush / Invalidate hint 到下层。
   // 这类请求不需要给 core 立即返回普通 load/store coreRsp。
   // flu or inv mem req
-  FluInvMemReq_st1.a_opcode := Mux(FluInvIsPut_st1,TLAOp_PutFull,TLAOp_Flush)
+  // bfs4096-001 partial-write clobber fix: PutPartialData on dirty writeback (not PutFullData)
+  FluInvMemReq_st1.a_opcode := Mux(FluInvIsPut_st1,TLAOp_PutPart,TLAOp_Flush)
   FluInvMemReq_st1.a_param := Mux(FluInvIsPut_st1, 0.U, Mux(CoreReq_pipeReg_st0_st1.deq.bits.Ctrl.isFlush, TLAParam_Flush, TLAParam_Inv))
   val dirtySetIdx_st1 = RegNext(io.tA_dirtySetIdx_st0)
   // === backprop1024-001 fix: FluInvMemReq identity snapshot ===
@@ -441,13 +522,16 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // live 信号继续推进，导致 holding 中的 writeback 的 (a_addr, a_data) 不再属于
   // 同一条 dirty cacheline，最终把别的 line（甚至全 0）写回 PMEM。
   // 同 gaussian fix #6 ReadHit snapshot 的形态，扩展到 flush 写回路径。
-  val fluInvLiveAddr = Cat(io.tA_dirtyTag_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
+  val fluInvLiveAddr = Cat(io.tA_dirtyTag_st1, 0.U((WordLength - bABits).W))
   val fluInvSnapData = Reg(Vec(BlockWords, UInt(WordLength.W)))
   val fluInvSnapAddr = Reg(UInt(WordLength.W))
+  // bfs4096-001 partial-write clobber fix: snapshot dirty byte-mask alongside addr/data
+  val fluInvSnapMask = Reg(UInt((BlockWords * BytesOfWord).W))
   val fluInvSnapValid = RegInit(false.B)
   when(FluInvMemReq_valid && FluInvIsPut_st1 && !fluInvSnapValid){
     fluInvSnapData := io.dA_data
     fluInvSnapAddr := fluInvLiveAddr
+    fluInvSnapMask := io.tA_dirtyMask_st1
     fluInvSnapValid := true.B
   }
   when(io.MissReq_Mem.fire && FluInvMemReq_valid){
@@ -459,7 +543,8 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   FluInvMemReq_st1.hasCoreRsp := false.B
   FluInvMemReq_st1.coreRspInstrId := DontCare
   FluInvMemReq_st1.activeMask := VecInit(Seq.fill(NLanes)(false.B))
-  FluInvMemReq_st1.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  FluInvMemReq_st1.a_mask :=
+    Mux(fluInvSnapValid, fluInvSnapMask, io.tA_dirtyMask_st1).asTypeOf(Vec(BlockWords, UInt(BytesOfWord.W)))
   FluInvMemReq_valid :=
     (FluInvIsPut_st1 || (FluInvIsFluL2_st1 && !FluInvL2MemReqIssuedReg)) &&
       CoreReq_pipeReg_st0_st1.deq.valid
@@ -469,7 +554,7 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // uncache hit dirty cacheline evict request
   evictMemReq_st1.a_opcode := TLAOp_PutFull
   evictMemReq_st1.a_param  := 0.U
-  evictMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((BlockOffsetBits + WordOffsetBits).W))
+  evictMemReq_st1.a_addr.get := Cat(BlockAddr_st1, 0.U((WordLength - bABits).W))
   evictMemReq_st1.a_data := io.dA_data
   evictMemReq_st1.hasCoreRsp := false.B
   evictMemReq_st1.a_source := DontCare
@@ -598,14 +683,13 @@ class CoreReqPipe(implicit p: Parameters) extends DCacheModule{
   // ******      dataAccess write hit      ******
   val DataAccessWriteHitSRAMWReq: Vec[SRAMBundleAW[UInt]] = Wire(Vec(BlockWords,new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
   //this setIdx = setIdx + wayIdx
-  DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat(activeSetIdx_st1,OHToUInt(io.tA_Hit_st1.waymask)))
+  DataAccessWriteHitSRAMWReq.foreach(_.setIdx := Cat(activeSetIdx_st1, OHToUInt(io.tA_Hit_st1.waymask)))
   for (i <- 0 until BlockWords){
     DataAccessWriteHitSRAMWReq(i).waymask.get := addrGen.io.MaskOut(i)
     io.WriteReq_dA_valid(i) := addrGen.io.MaskOut(i).orR
     DataAccessWriteHitSRAMWReq(i).data := addrGen.io.dataOut(i).asTypeOf(Vec(BytesOfWord,UInt(8.W)))
   }
   io.WriteReq_dA := DataAccessWriteHitSRAMWReq
-  io.flushIdle := (FlushInvstateReg === idle) && !FluInvRspPendingReg
   //st1 valid: enqueue st1 st2 pipe reg for coreRsp
   // indicating coreRsp is valid from core Req
   // case: regular read/write hit, uncached read hit, uncache write hit undirty, flush invalidate complete

@@ -30,7 +30,7 @@ class memRspPipe_st1(implicit p: Parameters) extends DCacheBundle{
 class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     private val MaxSets = dcache_NSets_max
     private val MaxSetIdxBits = log2Ceil(MaxSets)
-    private val MaxDataSets = MaxSets * dcache_NWays
+    private val MaxDataSets = MaxSets * NWays
 
     val io = IO(new Bundle{
          val memRsp = Flipped(DecoupledIO(new DCacheMemRsp))
@@ -45,16 +45,27 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
 
          //st1
          val memRsp_coreRsp     = DecoupledIO(new CoreRspPipe_st2)
-         val MSHRMissRspOut     = Flipped(DecoupledIO(new MSHRmissRspOut(bABits, tIBits, WIdBits, asidLen)))
+         // MSHRmissRspOut.instrId width = max(WIdBits, log2Up(NMshrEntry)) to allow
+         // NMshrEntry > num_warp; see bugs/bfs4096-003/phase_4_report.md.
+         val MSHRMissRspOut     = Flipped(DecoupledIO(new MSHRmissRspOut(bABits, tIBits, math.max(WIdBits, log2Up(NMshrEntry)), asidLen)))
          val MSHRMissRspOutAsid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
 
-         val SMSHRMissRspOut     = Flipped(DecoupledIO(new MSHRmissRspOut(bABits, tIBits, WIdBits, asidLen)))
+         val SMSHRMissRspOut     = Flipped(DecoupledIO(new MSHRmissRspOut(bABits, tIBits, math.max(WIdBits, log2Up(NMshrEntry)), asidLen)))
          val SMSHRMissRspOutAsid = if(MMU_ENABLED) Some(Input(UInt(asidLen.W))) else None
 
          val dAmemRsp_wReq         = Output(Vec(BlockWords, new SRAMBundleAW(UInt(8.W), MaxDataSets, BytesOfWord)))
          val dAmemRsp_wReq_valid   = Output(Bool())
          // dAmemRsp_wReq_valid 拉高时，对应的写回 cacheline blockAddr（tag+set），用于 coreReqPipe 做同拍冲突规避
          val dAmemRsp_wReq_blockAddr = Output(UInt(bABits.W))
+         // bfs4096-006 fix: 暴露 fill 写入的精确 dA row = Cat(set, victim_way)。
+         // 现有 dAmemRsp_wReq_blockAddr 只含 tag+set 不含 way，无法区分"跨 cacheline 同 (set, way) 撞"的场景。
+         // CoreReqPipe ST1 用这个比对 hit-read 命中的 Cat(set, hit_way) 检测 fillConflictSt1。
+         val dAmemRsp_wReq_setIdx    = Output(UInt(log2Ceil(MaxDataSets).W))
+         // bfs4096-006 fix: fill intent (= st1_valid, 不含 st1_ready 反馈)。
+         // dAmemRsp_wReq_valid = st1_valid && st1_ready 与下游 memRsp_coreRsp.ready 形成组合环
+         // (FIRRTL detected combinational cycle)。给 coreReqPipe 用 intent 破环，代价是 fill stall
+         // 时 hit 被保守 replay (fill stall 没写 dA 不会污染，replay 走 1 轮 latency 影响极小)。
+         val dAmemRsp_wReq_intent    = Output(Bool())
          val dAmemRsp_wReq_asid = if(MMU_ENABLED) Some(Output(UInt(asidLen.W))) else None
          val dAReplace_rReq        = Output(Vec(BlockWords, new SRAMBundleA(MaxDataSets)))
          val dAReplace_rReq_valid  = Output(Bool())
@@ -62,9 +73,12 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
          val tAWayMask             = Input(UInt(NWays.W))
          val needReplace           = Input(Bool())
          val memReq_ready          = Input(Bool())
+         val activeL1DSetMask      = Input(UInt(MaxSetIdxBits.W))
          // dirty replace 期间禁止 core 新请求进入，避免 victim line 仍可 write-hit
          val blockCoreReq          = Output(Bool())
-         val activeL1DSetMask      = Input(UInt(MaxSetIdxBits.W))
+         // bfs4096-008 §9 drain-before-invalidate: cached-read fill 流水线是否已 drain
+         //   (memRsp_Q head 无 cached read[W1] + st1 无 pending commit)。给 CoreReqPipe invalidate 启动门槛。
+         val fillPipeDrained       = Output(Bool())
 
     })
     // st0
@@ -89,6 +103,10 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val missRspTI_st1 = Wire(new VecMshrTargetInfo)
     val memRsp_st1_isRead = MemRsp_pipeReg_st0_st1.deq.bits.isRead
     val memRsp_st1_isSpecial = MemRsp_pipeReg_st0_st1.deq.bits.isSpecial && MemRsp_pipeReg_st0_st1.deq.valid
+    val memRspBlockAddr_st0 = get_blockAddr(io.memRsp.bits.d_addr)
+    val memRspBlockAddr_st1 = get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
+    val allocateSetIdx_st0 = memRspBlockAddr_st0(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
+    val allocateSetIdxFromRsp_st1 = memRspBlockAddr_st1(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
     val dAReq_valid = Wire(Bool())
     val st1_ready = Wire(Bool())
     val tAAllocateWriteReq_valid = WireInit(false.B)
@@ -96,9 +114,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     // -----st0-----
     io.memRspIsFlu := memRspisFlushOrInv && io.memRsp.valid
     io.tAAllocateWriteReq.valid := tAAllocateWriteReq_valid
-    val memRspBlockAddr_st0 = get_blockAddr(io.memRsp.bits.d_addr)
-    val memRspActiveSetIdx_st0 = memRspBlockAddr_st0(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
-    io.tAAllocateWriteReq.bits.setIdx := memRspActiveSetIdx_st0
+    io.tAAllocateWriteReq.bits.setIdx := allocateSetIdx_st0
     io.MSHRMissRsp.valid := io.memRsp.valid && memRspisRead
     io.MSHRMissRsp.bits.instrId := idx_st0
     io.SMSHRMissRsp.valid := io.memRsp.valid && memRspisSpecial
@@ -106,7 +122,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
 
     io.RTABUpdateReq.bits.mshrIdx := idx_st0
     io.RTABUpdateReq.bits.wshrIdx := idx_st0
-    io.RTABUpdateReq.bits.blockAddr := memRspBlockAddr_st0
+    io.RTABUpdateReq.bits.blockAddr := get_blockAddr(io.memRsp.bits.d_addr)
     io.RTABUpdateReq.bits.updateType := 0.U
     io.RTABUpdateReq.valid := RTABUpdateReq_valid
     io.WSHRPopReq.bits := idx_st0
@@ -147,12 +163,33 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     MemRsp_pipeReg_st0_st1.enq.bits.Rsp := io.memRsp.bits
     MemRsp_pipeReg_st0_st1.enq.bits.isRead := memRspisRead
     MemRsp_pipeReg_st0_st1.enq.bits.isSpecial := memRspisLRSC || memRspisAMO
-    MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!io.MSHRMissRspOutUCached,false.B)
+    // ============================================================================
+    // bfs4096-009 vecadd hang fix (人类架构师授权 2026-06-01): cached-fill 判断暂时一律按 cached。
+    //
+    //   根因(本 fix 绕过, 非根除): 下面 isCached 在 st0 enq 拍就锁进 pipeReg, 但它依赖的
+    //   io.MSHRMissRspOutUCached 来自 MSHR missRspOut_st1 (Queue flow=false), 与
+    //   io.MSHRMissRspOut.valid 同拍在 st1 才有效, 比 fill 数据(io.memRsp.valid)晚整整一拍。
+    //   pipeReg 其余字段(Rsp/isRead/isSpecial)都是 st0 数据, 唯独 cached/uncached 本质是 st1 信息,
+    //   用 st0 拍采它属 pipeline stage 错配 —— enq 拍采到的是上一笔残留/空闲默认值(=1 uncached),
+    //   使 cached fill 被误判 uncached → st1_valid≡0 → data array / tag allocate / tag-SRAM valid /
+    //   commit 脉冲(dAmemRsp_wReq_valid) 四处写端口全灭 → 该 cacheline 整行漏写。
+    //   baseline 下仅性能 latent(core 数据仍经 coreRsp 在 st1 正确返回, 只是行没进 cache, 下次重 miss);
+    //   叠加 v7 RTAB ReadMissFillWait 把"等 commit 脉冲"变成 replay 前进必要条件后 → 脉冲永不来 →
+    //   RTAB head-of-line 死锁。证据: bugs/bfs4096-009/vecadd_v7_hang_v1/checkpoint_hang_dive_v2_earlywindow.md
+    //
+    //   当前 GPU 设计无 uncached load 路径(所有 core load 均 cached, 见 pocl object0.dump),
+    //   故用 effectiveUCached 常 false 绕过该 stage 错配。
+    //   ⚠️ 将来引入 uncached 支持时, 不能只把 effectiveUCached 改回 io.MSHRMissRspOutUCached —— 必须
+    //      同时把 isCached 的采样从 st0 enq 拍移到 st1(与 io.MSHRMissRspOut.valid 同拍), 否则 skew 立即复现。
+    //      下面 L162 tag allocate / L211 drain 判断同源, 一并跟随 effectiveUCached。
+    // ============================================================================
+    val effectiveUCached = false.B  // 暂时常 cached; 原值 io.MSHRMissRspOutUCached(晚一拍, st1 才有效)
+    MemRsp_pipeReg_st0_st1.enq.bits.isCached := Mux(memRspisRead,!effectiveUCached,false.B)
     // val memRspEnqFire = st0_valid && MemRsp_pipeReg_st0_st1.enq.ready
     // allocateWrite 只能在 memRsp 真正进入 st1 pipeReg 后发起。
     // 否则当前一笔 memRsp 还在处理时，队头上已经露出来的下一笔 memRsp 会提前覆盖 allocate 上下文。
     val memRspEnqFire = MemRsp_pipeReg_st0_st1.enq.fire
-    tAAllocateWriteReq_valid := memRspEnqFire && memRspisRead && !io.MSHRMissRspOutUCached // cached read response
+    tAAllocateWriteReq_valid := memRspEnqFire && memRspisRead && !effectiveUCached // bfs4096-009: 暂常 cached(原 !io.MSHRMissRspOutUCached 在 st0 enq 拍陈旧, 见上 isCached 注释)
     // regular read 的 line data 可能要先于 st1 pipeReg 被 MSHR missRspOut 消费，
     // 因此只要 memRsp 到了队头，就先把整条 line 记下来，避免后面 metadata/data 错位。
     when(io.memRsp.valid && memRspisRead && !memRspisSpecial){
@@ -190,9 +227,7 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     io.memRsp_coreRsp.bits.readHitSnapshotData := DontCare
     // write to dA sram
     io.dAmemRsp_wReq.foreach(_.waymask.get := Fill(BytesOfWord, true.B))
-    val memRspBlockAddr_st1 = get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
-    val memRspActiveSetIdx_st1 = memRspBlockAddr_st1(MaxSetIdxBits - 1, 0) & io.activeL1DSetMask
-    io.dAmemRsp_wReq.foreach(_.setIdx := Cat(memRspActiveSetIdx_st1,OHToUInt(io.tAWayMask)))
+    io.dAmemRsp_wReq.foreach(_.setIdx := Cat(allocateSetIdxFromRsp_st1, OHToUInt(io.tAWayMask)))
     for (i <- 0 until BlockWords) {
       io.dAmemRsp_wReq(i).data := MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_data(i).asTypeOf(Vec(BytesOfWord, UInt(8.W)))
     }
@@ -200,6 +235,11 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     val tagRequestStatus = RegInit(idle)
     val tagRequestStatus_next = WireInit(tagRequestStatus)
     val st1_valid = MemRsp_pipeReg_st0_st1.deq.valid && MemRsp_pipeReg_st0_st1.deq.bits.isRead && MemRsp_pipeReg_st0_st1.deq.bits.isCached
+    // bfs4096-008 §9 drain-before-invalidate: cached-read fill 不在 memRsp_Q head(W1) 且不在 st1(pending commit)。
+    //   W1 覆盖: cachedReadAtHead 与 MSHR 清 subentry(L1MSHR missRspIn.valid=io.memRsp.valid&&memRspisRead)同拍对齐
+    //   → 窗口一开就 drain=0 挡 invalidate 启动。只追"会置 way_valid 的 cached read"; special/uncache 不计入。
+    val cachedReadAtHead = io.memRsp.valid && memRspisRead && !effectiveUCached // bfs4096-009: 暂常 cached(同上 isCached)
+    io.fillPipeDrained := !cachedReadAtHead && !st1_valid
     val needReplace_pulse = io.needReplace && st1_valid
     val needReplace_pending = RegInit(false.B)
     val needReplace_eff = needReplace_pending || needReplace_pulse
@@ -265,7 +305,12 @@ class MemRspPipe(implicit p: Parameters) extends DCacheModule{
     }
     MemRsp_pipeReg_st0_st1.deq.ready := st1_ready
     io.dAmemRsp_wReq_valid := dAReq_valid
-    io.dAmemRsp_wReq_blockAddr := memRspBlockAddr_st1
+    io.dAmemRsp_wReq_blockAddr := get_blockAddr(MemRsp_pipeReg_st0_st1.deq.bits.Rsp.d_addr)
+    // bfs4096-006 fix: 所有 BlockWords 共享同一 setIdx (= Cat(d_source.setIdx, OHToUInt(tAWayMask)))，
+    // 取第 0 个 word 的 setIdx 即可代表本次 fill 的目标 dA row。
+    io.dAmemRsp_wReq_setIdx := io.dAmemRsp_wReq(0).setIdx
+    // bfs4096-006 fix: 不含 st1_ready 反馈的 intent 信号，给 coreReqPipe / L1RTAB 用以破组合环。
+    io.dAmemRsp_wReq_intent := st1_valid
     if(MMU_ENABLED){
       io.dAmemRsp_wReq_asid.get := missRspAsid_st1.get
     }

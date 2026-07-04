@@ -81,13 +81,23 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val TagAccess = Module(new L1TagAccess(set=MaxSets, way=NWays, tagBits=bABits,AsidBits = asidLen,readOnly=false))
   val WshrAccess = Module(new DCacheWSHR(Depth = NWshrEntry))
   val ReplayTable = Module(new L1RTAB())
-  val MshrAccess = Module(new MSHR(bABits = bABits, tIWidth = tIBits, WIdBits = WIdBits, NMshrEntry, NMshrSubEntry, asidLen))
-  val SMshrAccess = Module(new SpecialMSHR(bABits = bABits, tIWidth = tIBits, WIdBits = WIdBits, NMshrEntry, asidLen))
+  // The MSHR class's `InstrIdBits` parameter (formerly `WIdBits` in V1 cache era) sets
+  // the width of MSHRmissReq/RspOut.instrId. V2 carries an MSHR index in this field, not
+  // a warp id; see L1MSHR.scala and bugs/bfs4096-003/phase_4_report.md. Pass
+  // max(WIdBits, log2Up(NMshrEntry)) so NMshrEntry can exceed num_warp.
+  val MshrAccess = Module(new MSHR(bABits = bABits, tIWidth = tIBits, InstrIdBits = math.max(WIdBits, log2Up(NMshrEntry)), NMshrEntry, NMshrSubEntry, asidLen))
+  val SMshrAccess = Module(new SpecialMSHR(bABits = bABits, tIWidth = tIBits, InstrIdBits = math.max(WIdBits, log2Up(NMshrEntry)), NMshrEntry, asidLen))
     // pipelines
   val coreReqPipe = Module(new CoreReqPipe)
   val memRspPipe = Module(new MemRspPipe)
-  val memRsp_Q = Module(new Queue(new DCacheMemRsp,entries = 2,flow=false,pipe=false))
-  val memReq_Q = Module(new Queue(new WshrMemReqV2,entries = 8,flow=false,pipe=false))
+  // [bfs4096-005] memRsp_Q 2→8, memReq_Q 8→32: L1↔L2 dead embrace 缓解
+  // 因果链 (run_d_postfix hang @3_750_265 ps): memRsp_Q 满(2)+ tagRequestStatus
+  // FSM 卡 memReq state + WSHR slot 9 read 序列化 → memReq_Q 反压 → MemRspPipe
+  // 永不让出 → fill 永不前进 → 死锁。memReq_Q=32 对齐 per-SM source identity
+  // 上限 (WSHR16+MSHR16)，memRsp_Q=8 给 fill 流水线足够 burst 缓冲。
+  // 注: 治标 (降低触发概率)，不治本 (MemRspPipe FSM 缺陷封存)。
+  val memRsp_Q = Module(new Queue(new DCacheMemRsp,entries = 8,flow=false,pipe=false))
+  val memReq_Q = Module(new Queue(new WshrMemReqV2,entries = 32,flow=false,pipe=false))
   val RTAB_pushedIdx_st2 = Module(new Queue(UInt(NRTABs.W),entries = 8,flow=false,pipe=false))
   val MemReqArb = Module(new Arbiter(new WshrMemReqV2, 2))
   val CoreReqArb = Module(new Arbiter(new DCacheCoreReq, 2))
@@ -207,9 +217,19 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   val replaceDataValid = RegInit(false.B)
   val replaceDataReg = Reg(Vec(BlockWords, UInt(WordLength.W)))
   val replaceAddrReg = Reg(UInt(WordLength.W))
+  // bfs4096-001 partial-write clobber fix: 与 data / addr 一起 hold victim 的字节级 dirty mask。
+  val replaceMaskReg = Reg(UInt((BlockWords * BytesOfWord).W))
+  // L1TagAccess.io.{a_addrReplacement_st1, replace_dirty_mask_st1, asidReplacement_st1}
+  // 后缀虽是 _st1 实为 SRAM r.resp.data 直出 wire，与 replaceReadResp 同步在 cycle N+1
+  // 出值，本 when 块直接抓即可——若再 RegNext 等于退到 cycle N（SRAM resp 未出，
+  // holdRead=true 让信号保留旧值）→ stale。
+  // 历史成因：backprop1024-001 (commit 08e296c8) 给 addr 加 RegNext 是 latent bug，在
+  // backprop 数据集未显现；bfs4096-001 patch 机械模仿到 mask 才让 stale 显形。
+  // 本次一并修正 addr / mask / asid。详见 bugs/bfs4096-001/checkpoint_3.md。
   when(replaceReadResp){
     replaceDataReg := DataAccessReadSRAMRRsp
-    replaceAddrReg := RegNext(TagAccess.io.a_addrReplacement_st1.get)
+    replaceAddrReg := TagAccess.io.a_addrReplacement_st1.get
+    replaceMaskReg := TagAccess.io.replace_dirty_mask_st1
     replaceDataValid := true.B
   }
   when(replaceMemReqFire){
@@ -253,18 +273,29 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   coreReqPipe.io.RTAB_full              := ReplayTable.io.RTAB_full
   coreReqPipe.io.hasDirty               := TagAccess.io.hasDirty_st0.get
   coreReqPipe.io.MSHREmpty              := MshrAccess.io.empty
+  coreReqPipe.io.fillPipeDrained        := memRspPipe.io.fillPipeDrained   // bfs4096-008 §9 drain-before-invalidate
   coreReqPipe.io.SMSHREmpty             := SMshrAccess.io.empty
   coreReqPipe.io.tA_dirtySetIdx_st0     := TagAccess.io.dirtySetIdx_st0.get
   coreReqPipe.io.tA_dirtyWayMask_st0    := TagAccess.io.dirtyWayMask_st0.get
   coreReqPipe.io.reqSource              := CoreReqArb.io.out.valid && ReplayTable.io.coreReq_replay.valid
   coreReqPipe.io.Probe_tA_ready         := TagAccess.io.probeRead.ready
   coreReqPipe.io.blockCoreReq           := blockCoreReq
-  coreReqPipe.io.refillWrite_valid      := memRspPipe.io.dAmemRsp_wReq_valid
+  // bfs4096-006 fix: refillWrite_valid 透给 coreReqPipe / RTAB 时用 intent (=memRspPipe.st1_valid)，
+  // 而不是 dAmemRsp_wReq_valid (=st1_valid && st1_ready)——后者经过 st1_ready 与 coreReqPipe
+  // memRsp_coreRsp.ready 形成 combinational cycle。intent 路径破环代价：fill stall 时 hit 保守 replay。
+  coreReqPipe.io.refillWrite_valid      := memRspPipe.io.dAmemRsp_wReq_intent
   coreReqPipe.io.refillWrite_blockAddr  := memRspPipe.io.dAmemRsp_wReq_blockAddr
   coreReqPipe.io.activeL1DSetMask       := activeL1DSetMask
+  // bfs4096-006 fix: 透传 fill 的精确 dA row id (Cat(set, victim_way))，CoreReqPipe ST1 用以检测
+  // hit-read 与 fill 同拍撞同 dA row (bypassWrite=true 跨 cacheline 数据污染场景)。
+  coreReqPipe.io.refillWrite_setIdx     := memRspPipe.io.dAmemRsp_wReq_setIdx
   if(MMU_ENABLED){
     coreReqPipe.io.refillWrite_asid.get := memRspPipe.io.dAmemRsp_wReq_asid.get
   }
+  // bfs4096-009 fix: 真实 fill commit (=dAmemRsp_wReq_valid, 含 st1_ready) 给 CoreReqPipe commit-seen latch。
+  // 区别于上面 refillWrite_valid 用的 intent —— commit-seen 要"真写进去了"，且只进 Reg 不组合回 ready/valid。
+  coreReqPipe.io.fillCommit_valid     := memRspPipe.io.dAmemRsp_wReq_valid
+  coreReqPipe.io.fillCommit_blockAddr := memRspPipe.io.dAmemRsp_wReq_blockAddr
   coreReqPipe.io.mshrReleasing_valid     := MshrAccess.io.releasing_valid
   coreReqPipe.io.mshrReleasing_blockAddr := MshrAccess.io.releasing_blockAddr
   if(MMU_ENABLED){
@@ -276,6 +307,8 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
     coreReqPipe.io.tA_dirtyAsid_st1.get := TagAccess.io.dirtyASID_st1.get
   }
   coreReqPipe.io.tA_dirtyTag_st1   := TagAccess.io.dirtyTag_st1.get
+  // bfs4096-001 fix: 透传 byte 级 dirty mask 给 CoreReqPipe（flush/invalidate 走 PutPartialData）。
+  coreReqPipe.io.tA_dirtyMask_st1  := TagAccess.io.dirtyMask_st1
   coreReqPipe.io.MSHR_ProbeStatus  := MshrAccess.io.probeOut_st1
   coreReqPipe.io.SMSHR_ProbeStatus := SMshrAccess.io.probeOut_st1
   coreReqPipe.io.WSHR_CheckResult  := WshrAccess.io.checkresult
@@ -309,6 +342,11 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   TagAccess.io.probeIsUncache_st1       := coreReqPipe.io.coreReq_Control_st1.isUncached
   TagAccess.io.tagready_st1    := coreReqPipe.io.st1_ready
   TagAccess.io.perLaneAddr_st1 := coreReqPipe.io.perLaneAddr_st1
+  // bfs4096-002 fix: 把 ST1 队头有效信号（CoreReq_pipeReg_st0_st1.deq.valid）接入 TagAccess，
+  // 用作 dirtyMaskWriteArb.in(1).valid 的严格 gate。否则 cache_hit 与 probeIsWrite_st1
+  // 在两次 dispatch 之间持续保持高电平，导致 in(1) 长期重写同一 set 的 dirty mask。
+  // 详见 L1TagAccess.scala:312 注释 + bugs/bfs4096-002/checkpoint_3.md 迭代 1。
+  TagAccess.io.coreReq_st1_valid := coreReqPipe.io.st1_valid
   if(MMU_ENABLED){
     TagAccess.io.asidFromCore_st1.get := coreReqPipe.io.asidFromCore_tA_st1.get
   }
@@ -351,6 +389,13 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   //rtab
   ReplayTable.io.mshrFull := MshrAccess.io.full
   ReplayTable.io.LRexist  := SMshrAccess.io.probeOut_st1.LRexist
+  // bfs4096-006 fix: 让 L1RTAB 看到 fill timing。fillConflict 类型的 replay 必须等
+  // fill 完 (refillWrite_intent=0) 才 inject，避免 fill 多拍写 dA 时反复 livelock。
+  // 用 intent (=st1_valid) 而非 valid (=st1_valid && st1_ready)，与 coreReqPipe 一致破组合环。
+  ReplayTable.io.refillWrite_valid := memRspPipe.io.dAmemRsp_wReq_intent
+  // bfs4096-009 fix: 真实 fill commit 给 RTAB ReadMissFillWait per-entry sticky fillCommitted
+  ReplayTable.io.fillCommit_valid     := memRspPipe.io.dAmemRsp_wReq_valid
+  ReplayTable.io.fillCommit_blockAddr := memRspPipe.io.dAmemRsp_wReq_blockAddr
   ReplayTable.io.pushedWSHRIdxUpdate.valid := WshrAccess.io.pushReq.valid
   ReplayTable.io.pushedWSHRIdxUpdate.bits.wshrIdx  := WshrAccess.io.pushedIdx
   ReplayTable.io.pushedWSHRIdxUpdate.bits.RTABIdx  := RTAB_pushedIdx_st2.io.deq.bits
@@ -385,16 +430,21 @@ class DataCachev2(SV: Option[mmu.SVParam] = None)(implicit p: Parameters) extend
   RTAB_pushedIdx_st2.io.enq.valid := MemReqArb.io.out.valid
   RTAB_pushedIdx_st2.io.enq.bits  := ReplayTable.io.RTABpushedIdx
   RTAB_pushedIdx_st2.io.deq.ready := memReq_Q.io.deq.ready
-  dirtyReplaceMemReq.a_opcode := 0.U//PutFullData
+  // bfs4096-001 partial-write clobber fix: 改用 PutPartialData + 字节级 mask。
+  // 旧实现用 PutFullData + 全 1 mask，会让某 SM 的整行写回覆盖别的 SM 在同一
+  // cacheline 不同 byte 上合法写入的内容（多 SM 共享 cacheline 时累积污染）。
+  dirtyReplaceMemReq.a_opcode := TLAOp_PutPart
   dirtyReplaceMemReq.a_param := 0.U//regular write
   dirtyReplaceMemReq.a_source := DontCare//wait for WSHR
   val replaceDataSel = Mux(replaceDataValid, replaceDataReg, DataAccessReadSRAMRRsp)
-  val replaceAddrSel = Mux(replaceDataValid, replaceAddrReg, RegNext(TagAccess.io.a_addrReplacement_st1.get))
+  val replaceAddrSel = Mux(replaceDataValid, replaceAddrReg, TagAccess.io.a_addrReplacement_st1.get)
+  val replaceMaskSel = Mux(replaceDataValid, replaceMaskReg, TagAccess.io.replace_dirty_mask_st1)
   dirtyReplaceMemReq.a_addr.get := replaceAddrSel
   if(MMU_ENABLED){
-    dirtyReplaceMemReq.Asid.get := RegNext(TagAccess.io.asidReplacement_st1.get)
+    // asidReplacement_st1 同样是 SRAM resp 直出 wire，与 addr/mask 同时机更新，不能 RegNext。
+    dirtyReplaceMemReq.Asid.get := TagAccess.io.asidReplacement_st1.get
   }
-  dirtyReplaceMemReq.a_mask := VecInit(Seq.fill(BlockWords)(Fill(BytesOfWord,1.U)))
+  dirtyReplaceMemReq.a_mask := replaceMaskSel.asTypeOf(Vec(BlockWords, UInt(BytesOfWord.W)))
   dirtyReplaceMemReq.a_data := replaceDataSel//wait for data SRAM in next cycle
   dirtyReplaceMemReq.hasCoreRsp := false.B
   dirtyReplaceMemReq.coreRspInstrId := DontCare

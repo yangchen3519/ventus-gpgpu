@@ -58,6 +58,15 @@ class DirectoryWrite_lite(params: InclusiveCacheParameters_lite) extends Bundle 
   //override def cloneType: DirectoryWrite_lite.this.type = new DirectoryWrite_lite(params).asInstanceOf[this.type]
 }
 
+// nn64k-007 Phase 4.5 迭代6: directory-local reservation 的 mixed 撤销线 payload。
+// Scheduler 在某 MSHR 被标 mixed 那拍（primary Get 被 secondary 撞，sche_dir_valid 被抑制 →
+// 注定不再 io.write.fire → reservation 永不自然清 → 孤儿）把该 MSHR 的 (set,way) 喂回来，
+// 主动撤销其 reservation。详见 bugs/nn64k-007/checkpoint_3.md 迭代6。
+class ResvClear_lite(params: InclusiveCacheParameters_lite) extends Bundle {
+  val set = UInt(params.setBits.W)
+  val way = UInt(params.wayBits.W)
+}
+
 class DirectoryRead_lite(params: InclusiveCacheParameters_lite) extends FullRequest(params)
 {
   //override def cloneType: DirectoryRead_lite.this.type = new DirectoryRead_lite(params).asInstanceOf[this.type]
@@ -91,6 +100,8 @@ class Directory_test(params: InclusiveCacheParameters_lite) extends Module
     val invalidate =Input(Bool())
     val tag_match = Input(Bool())
     val flush_invalidate_src=Input(UInt(params.source_bits.W))
+    // nn64k-007 Phase 4.5 迭代6: mixed 落空撤销线（Scheduler→Directory），见 ResvClear_lite。
+    val resv_clear = Flipped(Valid(new ResvClear_lite(params)))
  //   val finish_issue =Output(Bool())
   })
 
@@ -184,12 +195,17 @@ class Directory_test(params: InclusiveCacheParameters_lite) extends Module
         }
         status_reg(i).dirty(j) := false.B
 
-      }.elsewhen(io.result.valid && io.result.bits.hit && (io.result.bits.opcode === PutPartialData || io.result.bits.opcode === PutFullData) && io.result.bits.way===j.asUInt && io.result.bits.set===i.asUInt) {
+      // bfs4096-002 iter5 fix #2: status_reg 推进改用 io.result.fire（不再看 .valid）。
+      // ready=0 反压时若按 .valid 推进，会让 status_reg.dirty 在 N 拍清零 → N+1 拍
+      // result.bits.dirty (组合读 status_reg) 跟塌 → enq.valid 自塌 → evict 漏 enq。
+      // 改 fire 让推进只在握手成功那拍发生。hit+write 路径同改保对称。
+      // 配套：Scheduler.scala:255 (#1) + Scheduler.scala:217 (#3)。详见 checkpoint_3_iter5.md。
+      }.elsewhen(io.result.fire && io.result.bits.hit && (io.result.bits.opcode === PutPartialData || io.result.bits.opcode === PutFullData) && io.result.bits.way===j.asUInt && io.result.bits.set===i.asUInt) {
         status_reg(i).dirty(j) := true.B
-      }.elsewhen(io.result.valid && !io.result.bits.hit && io.result.bits.way===j.asUInt && io.result.bits.set===i.asUInt && !not_replace) {
+      }.elsewhen(io.result.fire && !io.result.bits.hit && io.result.bits.way===j.asUInt && io.result.bits.set===i.asUInt && !not_replace) {
         status_reg(i).valid(j) := false.B
         status_reg(i).dirty(j) := false.B
-      }.elsewhen(io.write.valid && io.write.bits.set===i.asUInt && io.write.bits.way===j.asUInt) {
+      }.elsewhen(io.write.fire && io.write.bits.set===i.asUInt && io.write.bits.way===j.asUInt) {  // nn64k-007 迭代6: .valid→.fire, 与 reservation clear / BankedStore 写同拍原子交接
         status_reg(i).valid(j) := true.B//(status_reg(i).valid.asUInt | (1.U << io.write.bits.way).asUInt).asBools
         status_reg(i).dirty(j) := false.B //io.write.bits.is_writemiss //(status_reg(i).dirty.asUInt | (0.U << io.write.bits.way).asUInt).asBools
       }
@@ -223,8 +239,46 @@ for(i<- 0 until params.cache.sets){
   }
   val victim_LFSR = lfsr
 
+  // nn64k-007 Phase 4.5 迭代6: directory-local reservation bitmap（per-set 每 way 1 位）。
+  // 根因: victim invalid-first 用 ~status_reg(set).valid 选 way，但 status_reg.valid 置位
+  //   (io.write.fire = fill commit) 晚于 victim 决策整个 DRAM round-trip(~14cyc)，期间背靠背
+  //   同 set Get miss 都看到 victim way valid=0 → 确定性撞同一 way → 后一个 fill 覆盖前一个
+  //   (BankedStore set/way 错位 → SM 读出邻 cacheline 数据 → 函数指针腐败 → 跳 data 段崩溃)。
+  // 修法: victim 选中 way 那拍(will_alloc_victim) set reservation; 在两个"确定到达"的终结点清:
+  //   (a) 兑现 = io.write.fire(refill commit, 同拍拉高 valid + 写 BankedStore 那个 way, 三位一体)
+  //   (b) 落空 = io.resv_clear(该 Get 被 secondary 撞成 mixed, MSHR 抑制 sche_dir_valid 注定不 fire)
+  //   victim 选择避开 valid∪reserved; 无真空 way 时 read.ready 用 victim_stall 挡新 read。
+  //   will_alloc_victim 已带 !not_replace ⇒ 纯 Put miss / secondary miss(tag_match) 天然不 set
+  //   (它们不写 BankedStore/directory、不占 way)，故只剩 mixed 一条孤儿路径需 (b) 撤销。
+  val reservation = RegInit(VecInit(Seq.fill(params.cache.sets)(0.U(params.cache.ways.W))))
+  val will_alloc_victim = io.result.fire && !io.result.bits.hit && !io.result.bits.flush && !not_replace
 
-  val victimWay = victim_LFSR(params.wayBits-1,0)//replacer_array(set)
+  // bfs4096-010 fix A（触发层）: victim 选择优先填 invalid way（invalid-first）。
+  //   根因: 原 `victimWay = victim_LFSR(...)` 纯 LFSR 随机, 不查 status_reg(set).valid,
+  //         即便 set 还有空闲(invalid) way 也可能盲选中 valid+dirty way 当 victim →
+  //         触发 L2 evict-vs-fill WAR(dirty victim readback 被同事务 fill 写早覆盖) →
+  //         把新住户数据当 victim 写回旧地址(cost DRAM 0x90004100 整行被 graph 污染)。
+  //   改法: 有 invalid way 时优先选第一个 invalid(不 evict, 不踢 dirty victim);
+  //         set 全 valid 时才退回原 LFSR 随机。
+  //   注: 触发层缓解, 非治本——set 满时 LFSR 仍可选 dirty victim, WAR 仍 latent,
+  //       根治需 fix B(保证 evict readback 早于同事务 fill write)。
+  //       详见 bugs/bfs4096-010/checkpoint_3_rtl_dive.md + phase_4_report.md §8。
+  // nn64k-007 迭代6: victim 避开 valid∪reserved(occupied)。四态(5-D 与 victim_stall 精确等价):
+  //   (1) effInvalidVec≠0      : 有真空 way(非 valid 且非 reserved) → PriorityEncoder 选它
+  //   (2) effInvalid=0,invalid≠0: 空 way 全被 reserved → 占位 0.U(被 victim_stall 挡, 永不采纳)
+  //   (3) set 真满(invalid=0),有非 reserved valid → lfsrPick(mask-safe) evict
+  //   (4) 全 reserved          : 占位 0.U(被 victim_stall 挡)
+  val validVec      = status_reg(set).valid.asUInt
+  val invalidVec    = (~validVec).asUInt
+  val resvVec       = reservation(set)
+  val effInvalidVec = invalidVec & (~resvVec).asUInt
+  val nonResvValid  = validVec   & (~resvVec).asUInt
+  // mask-safe lfsr pick: lfsr∩mask 非空则选交集首位(伪随机), 否则 mask 首位; 输出恒 ∈ mask
+  val lfsrMaskedFull = victim_LFSR(params.cache.ways-1,0) & nonResvValid
+  val fullPick       = Mux(lfsrMaskedFull.orR, PriorityEncoder(lfsrMaskedFull), PriorityEncoder(nonResvValid))
+  val victimWay = Mux(effInvalidVec.orR, PriorityEncoder(effInvalidVec),
+                      Mux(invalidVec.orR, 0.U,
+                          Mux(nonResvValid.orR, fullPick, 0.U)))
 
   val setQuash_1 = wen && io.write.bits.set === io.read.bits.set //表示write到上次读出来的set
 
@@ -286,10 +340,57 @@ for(i<- 0 until params.cache.sets){
   val timely_hit = (RegNext(io.read.bits.tag) ===io.write.bits.data.tag) && io.write.fire && (RegNext(io.read.bits.set)===io.write.bits.set)
 
   val flush_issue_regnext = RegNext(flush_issue, false.B)
-  io.read.ready := ((wipeDone && !io.write.fire) || (setQuash_1 && tagMatch_1)) && !flush_issue_reg  && io.result.ready//also fire when bypass
+  // nn64k-007 迭代6: victim_stall(codex#3 精确公式 + next-state)。occSetThisCyc 并入同拍刚预定的 way
+  // (修 same-cycle hole); rdInvalidVec.orR 项修 mixed-state hole(有空 way 但全 reserved 时不踢 valid, 等填回)。
+  val rdSet         = io.read.bits.set
+  val occSetThisCyc = Mux(will_alloc_victim && (io.result.bits.set === rdSet),
+                          UIntToOH(io.result.bits.way, params.cache.ways), 0.U)
+  val rdValidVec    = status_reg(rdSet).valid.asUInt
+  val rdResvNext    = reservation(rdSet) | occSetThisCyc
+  val rdInvalidVec  = (~rdValidVec).asUInt
+  val rdEffInvalid  = rdInvalidVec & (~rdResvNext).asUInt
+  val rdNonResvVal  = rdValidVec   & (~rdResvNext).asUInt
+  val victim_stall  = (rdEffInvalid === 0.U) && (rdInvalidVec.orR || (rdNonResvVal === 0.U))
+  io.read.ready := (((wipeDone && !io.write.fire) && !victim_stall) || (setQuash_1 && tagMatch_1)) && !flush_issue_reg  && io.result.ready//also fire when bypass
   io.result.valid := Mux(flush_issue_regnext, io.result.bits.last_flush|| RegNext(status_reg(flush_set).dirty(flush_way) && flush_issue, false.B), valid_signal)
-  io.result.bits.hit := (hit || (setQuash && tagMatch )|| timely_hit) && (!about_replace)
-  io.result.bits.way  := Mux(flush_issue_regnext, RegNext(flush_way, false.B),Mux(setQuash && tagMatch, RegNext(io.write.bits.way), Mux(timely_hit, io.write.bits.way, Mux(hit, OHToUInt(hits), victimWay))))
+
+  // bfs4096-004 fix: 把 io.result.bits 的 {hit, way, dirty, victim_tag} 4 个字段从纯组合
+  // 改为 RegEnable(comb, ren1) 锁存版本，避开 Decoupled 反压窗口里 directory.write
+  // 改写 ways / hits / status_reg 导致 result.bits 中途突变的 race。
+  //
+  // 现场（anchor v3 fst @bfs_4096，N=16）：
+  //   t=2_945_435  visited lookup 命中 way=1，result.bits.way=1，result.ready=0（dir_result_buffer 反压）
+  //   t=2_945_505  另一 MSHR_5 的 dir write fire (set=28, way=15, tag=0x90030)；与上面同 set
+  //   t=2_945_514  组合表达式 OHToUInt(hits) 因 ways(28)/hits 被刷新而变成 15，
+  //                io.result.bits.way 在反压期间从 1 突变到 15
+  //   t=2_945_605  dir_result_buffer 终于 enq fire，way=15 入队（不再是 lookup 时的 1）
+  //   t=2_945_635  sourceD HIT 路径用 way=15 读 BankedStore (set=28, way=15)，
+  //                拿到 12 拍前 MSHR_5 刚 fill 的 grEdges 数据，串污染回 L1 dcache
+  //
+  // 修法采用 Mux(ren1, comb, reg) 风格而不是直接 reg：RegEnable 在 ren1=1 那拍 reg 还是
+  // 上次锁存值（要等下一个 clock edge 才更新），但 valid_signal 在 ren1=1 当周期就是 1
+  // (line 284)。若同拍 ready=1（零反压 fire），下游会拿到 stale reg。Mux on ren1 让
+  // 当拍直接走 comb 表达式（与 valid 同步），反压期间走 reg（稳定）。
+  //
+  // 范围最小化：flush 路径（flush_issue_regnext=1 分支）完全保持原样——flush 时
+  // io.write.ready=0（line 277），dir.write 不可能 fire，没有反压期被改写的 race。
+  // about_replace（line 289）也不动——它仍每拍重算，但只在 ren1 那拍被 sample 到
+  // result_hit_reg，反压期出现的新 about_replace=1 不再传到下游，正向修复。
+  val result_hit_comb        = (hit || (setQuash && tagMatch) || timely_hit) && (!about_replace)
+  val normal_way_comb        = Mux(setQuash && tagMatch, RegNext(io.write.bits.way),
+                                   Mux(timely_hit, io.write.bits.way,
+                                       Mux(hit, OHToUInt(hits), victimWay)))
+  val normal_dirty_comb      = Mux(not_replace, false.B, (status_reg(set).dirty(normal_way_comb)).asBool)
+  val normal_victim_tag_comb = ways(normal_way_comb).tag
+
+  val result_hit_reg         = RegEnable(result_hit_comb,        ren1)
+  val normal_way_reg         = RegEnable(normal_way_comb,        ren1)
+  val normal_dirty_reg       = RegEnable(normal_dirty_comb,      ren1)
+  val normal_victim_tag_reg  = RegEnable(normal_victim_tag_comb, ren1)
+
+  io.result.bits.hit := Mux(ren1, result_hit_comb, result_hit_reg)
+  io.result.bits.way  := Mux(flush_issue_regnext, RegNext(flush_way, false.B),
+                             Mux(ren1, normal_way_comb, normal_way_reg))
   io.result.bits.put    :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.put)
   io.result.bits.data   :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.data)
   io.result.bits.offset :=Mux(flush_issue_regnext, 0.U ,read_bits_reg.offset)
@@ -301,12 +402,41 @@ for(i<- 0 until params.cache.sets){
   io.result.bits.opcode :=Mux(flush_issue_regnext, Hint, read_bits_reg.opcode)
 
   io.result.bits.mask   :=Mux(flush_issue_regnext, Fill(params.mask_bits,1.U),read_bits_reg.mask)
-  io.result.bits.dirty  :=Mux(flush_issue_regnext, RegNext(status_reg(flush_set).dirty(flush_way), false.B), Mux(not_replace,false.B,(status_reg(set).dirty(io.result.bits.way)).asBool))
+  io.result.bits.dirty  :=Mux(flush_issue_regnext, RegNext(status_reg(flush_set).dirty(flush_way), false.B),
+                              Mux(ren1, normal_dirty_comb, normal_dirty_reg))
   io.result.bits.last_flush :=Mux(flush_issue_regnext, RegNext(flushDone, false.B),false.B)
   io.result.bits.flush  := RegNext(flush_issue, false.B)
-  io.result.bits.victim_tag:= ways(io.result.bits.way).tag
+  // bfs4096-004 fix: victim_tag 原本隐式依赖 io.result.bits.way 已经按 flush_issue_regnext 分支选过，
+  // 现在 way 已改为锁存版本，必须在这里显式 mux 出 flush 分支（用 ways(RegNext(flush_way)).tag），
+  // 否则反压期间 ways(...) 仍是组合读，会被 dir.write 改 ways 后污染 victim_tag。
+  io.result.bits.victim_tag := Mux(flush_issue_regnext, ways(RegNext(flush_way, false.B)).tag,
+                                   Mux(ren1, normal_victim_tag_comb, normal_victim_tag_reg))
   //todo what's the function of flush
   io.result.bits.l2cidx := Mux(flush_issue_regnext, 0.U, read_bits_reg.l2cidx)
   io.result.bits.param  := Mux(flush_issue_regnext, 0.U, read_bits_reg.param)
   io.result.bits.spike_info.foreach( _ := read_bits_reg.spike_info.getOrElse(0.U) )
+
+  // nn64k-007 Phase 4.5 迭代6: reservation set/clear。
+  //   set:   will_alloc_victim 那拍预定选中的 victim way(只 primary Get miss, 见 will_alloc_victim 定义)
+  //   clear: (a) io.write.fire = refill commit 兑现   (b) io.resv_clear = mixed 落空撤销
+  //   set 与 clear 不同 way(set 是新 alloc 的 way, clear 是已 in-flight MSHR 的 way), 不冲突。
+  val resv_set_oh   = Mux(will_alloc_victim,    UIntToOH(io.result.bits.way,     params.cache.ways), 0.U)
+  val resv_clr_w_oh = Mux(io.write.fire,        UIntToOH(io.write.bits.way,      params.cache.ways), 0.U)
+  val resv_clr_m_oh = Mux(io.resv_clear.valid,  UIntToOH(io.resv_clear.bits.way, params.cache.ways), 0.U)
+  for (i <- 0 until params.cache.sets) {
+    val s   = Mux(io.result.bits.set     === i.asUInt, resv_set_oh,   0.U)
+    val c_w = Mux(io.write.bits.set      === i.asUInt, resv_clr_w_oh, 0.U)
+    val c_m = Mux(io.resv_clear.bits.set === i.asUInt, resv_clr_m_oh, 0.U)
+    when(!wipeDone) {
+      reservation(i) := 0.U
+    }.otherwise {
+      reservation(i) := (reservation(i) & (~(c_w | c_m)).asUInt) | s
+    }
+  }
+
+  // nn64k-007 迭代6 诊断(non-fatal, 留痕不中断): victim_stall 若漏挡, will_alloc_victim 会落到
+  // placeholder 分支(2)(effInvalid=0 但 invalidVec≠0) → 把 reserved way 当 victim alloc。正确则永不打印。
+  when(will_alloc_victim && !effInvalidVec.orR && invalidVec.orR) {
+    printf(p"[RESV_PLACEHOLDER_ALLOC] set=${io.result.bits.set} way=${io.result.bits.way} (victim_stall leak)\n")
+  }
 }
