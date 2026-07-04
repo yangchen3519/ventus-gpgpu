@@ -150,6 +150,7 @@ class pipe() extends Module{
   lsu.io.csr_tid:=csrfile.io.lsu_tid
   lsu.io.csr_numw:=csrfile.io.lsu_numw
   lsu.io.csr_numt:=csrfile.io.lsu_numt
+  lsu.io.csr_smem_size:=csrfile.io.lsu_smem_size
   if (SPIKE_OUTPUT) {
     when(csrfile.io.in.valid && csrfile.io.in.bits.ctrl.custom_signal_0){
       printf(p"sm ${sm_id} warp ${Decimal(csrfile.io.in.bits.ctrl.wid)} " +

@@ -28,6 +28,7 @@ class hitStatus(way: Int, tagBits: Int) extends Bundle{
 }
 //This module contain Tag memory, its valid bits, tag comparator, and Replacement Unit
 class L1TagAccess(set: Int, way: Int, tagBits: Int, AsidBits: Int, readOnly: Boolean)(implicit p: Parameters)extends Module{
+  private val blockAddrBits = xLen - dcache_BlockOffsetBits - dcache_WordOffsetBits
   val io = IO(new Bundle {
     //From coreReq_pipe0
     val probeRead = Flipped(Decoupled(new SRAMBundleA(set)))//Probe Channel
@@ -476,7 +477,7 @@ if(MMU_ENABLED) {
   io.waymaskReplacement_st1 := lockedWayMask//tag_array::replace_choice (要素①: 锁存 way 导出 → 透传 MemRspPipe data-write/victim-read)
   val replacementTagData = tagBodyAccess.io.r.resp.data(OHToUInt(lockedWayMask))
   val replacementBlockAddr =
-    if (tagBits == bABits) {
+    if (tagBits == blockAddrBits) {
       replacementTagData
     } else {
       Cat(replacementTagData, allocateWrite_st1.setIdx)
